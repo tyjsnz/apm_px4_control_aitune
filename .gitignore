@@ -1,0 +1,37 @@
+# --- 明确排除（用户指定）---
+apm_mavlink_session.json
+RADAR_CHANGELOG.md
+
+# --- 本地配置 / 密钥 / 记忆 ---
+ai_tune_config.json
+apm_ui_config.json
+px4_ui_config.json
+tianditu_key.txt
+*.key
+
+# --- 运行时产物 ---
+flight_logs/
+ai_tune_backups/
+map_tiles/
+*.csv
+ui_hang_dump.txt
+*.log
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- IDE / 工具 ---
+.opencode/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Git ---
+*.orig
+*.rej
