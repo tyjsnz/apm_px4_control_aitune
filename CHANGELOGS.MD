@@ -2,6 +2,159 @@
 
 APM/ArduPilot MAVLink 控制脚本开发日志。
 
+## v1.16 - 2026-10-07
+
+### 新增 — 顶栏「重启飞控」按钮 (`ai_pid_tune.py`)
+- 位置在「断开」按钮之后，默认 `disabled`；`_after_connect` 启用、`on_disconnect` 禁用。
+- `on_reboot_fc` 四道门禁：未连接拒绝 → `action_busy`(有任务运行中)拒绝 →
+  `_fc_armed()` 读一条心跳判定已解锁则弹错拒绝 → `_confirm_reboot()` 二次确认后才入队。
+- `_do_reboot_fc`(worker 线程)：入队后**再校验一次解锁**(防对话框与执行之间起飞) →
+  发 `MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN(param1=1)` → 轮询心跳，**中断 ≥2.5s** 判定重启开始
+  → 链路标签变 `○ 重启中(请断开后重新连接)`；15s 无中断则报「可能未被执行」。
+  实现与 `apm_control_test.py:reboot_flight_controller` / `apm_control_ui.py:on_reboot_fc` 同源，
+  但不依赖 `tct`/`proxy`（本工具只用 `self.mav_master`，与其它 `_do_*` 一致从 worker 线程收消息）。
+
+### 新增 — 「拆桨实测起转」二次确认 (防未拆桨伤人)
+- 第一次仍是原说明 `askyesno`（补一句「下一步还有一次二次确认」）。
+- 新增 `_ot_spin_confirm()`：模态 `Toplevel` + `grab_set`，醒目警告未拆桨起转的后果
+  （6%→40% 逐档、约 1500~2000 RPM、桨叶甩出可割伤人员），三项检查(桨叶全拆/人员手指远离/
+  飞控固定)；**必须勾选**「我已拆下全部桨叶…」`开始实测` 按钮才从 `disabled` 变可点，
+  否则点 X / 取消一律 `False`，只记一行日志且**不发送任何电机指令**。
+- 两处确认方法均可整体打桩替换，便于自动化测试。
+
+### 文档
+- `OT_HELP` 第六节补「两次确认 + 顶栏重启飞控」说明；README 一键首飞小节补
+  重启飞控流程、第 2 阶段补两次确认提示。
+
+## v1.15 - 2026-10-06
+
+### 新增 — 用途第三项「AUTO 任务航点」(按 `docs/AUTO模式专用速查表.md`)
+- 判断结果：**整合进「一键首飞」，不新开页签** —— AUTO/GUIDED 底层共用 WPNAV 导航层，
+  现有 8 阶段里 6 个(电池/怠速/起飞/垂直/滤波/安全)完全通用，只有第 4 阶段取值、
+  15 项 AUTO 专属行与文案不同；新页签要复制约 60 行派生逻辑 + 体检/校验/备份/复读。
+- 用途下拉改 3 值：`首飞(安全保守)` / `GUIDED 外部引导追踪` / `AUTO 任务航点`
+  (内部键 `track` → `guided`)；首飞与 GUIDED 项数不变(57/43、57/52)，**AUTO = 72/54**。
+- **新增 `_AUTO_PROFILES`(软/标/激)**，全部按固件范围封顶：
+  `WPNAV_SPEED` 1200/1500/**2000**(文档 2000~2500 超上限)、`WPNAV_ACCEL` 300/400/**500**、
+  `WPNAV_JERK` 12/15/20、`WPNAV_RADIUS` 300/200/100、`PSC_POSXY_P` 1.2/1.4/1.8(文档 1.2~1.8)、
+  `PSC_VELXY_P` 1.5/2.0/2.2(文档 1.5~2.2)、`PSC_VELXY_I` 0.7/1.0/1.0(文档 0.5~1.0)、
+  `PSC_VELXY_FF` 0.1/0.1/0.2、`WPNAV_SPEED_UP` 300/400/500(文档 300~500)、
+  `WPNAV_SPEED_DN` 200/300/400(文档 200~400)、`WPNAV_ACCEL_Z` 300/400/**500**(文档 500~800→封顶)、
+  `PSC_JERK_Z` 10/14/20(文档 10~20)、`PSC_VELZ_FF` 0.1/0.2/0.3。
+- **AUTO 用途独有 15 项**：
+  - 第 4 阶段 +4：`WP_YAW_BEHAVIOR=2`(0~3，多旋翼默认=指下个航点、RTL 例外)、
+    `TUNE=10`(机上旋钮调 WP Speed)、`TUNE_MIN=500 / TUNE_MAX=2000`(cm/s，默认 0，均不勾选)
+  - 第 7 阶段 +7(全部只展示不勾选)：`AHRS_EKF_TYPE=3`、`EK3_ENABLE=1`、
+    `EK3_SRC1_POSXY=3 / VELXY=3 / POSZ=1 / VELZ=3 / YAW=1`(值与默认已从 `AP_NavEKF_Source.cpp` 核实)
+  - 第 8 阶段 +4：`RTL_ALT_FINAL=0`(勾选，0=任务结束自动降落)、`FS_GCS_TIMEOUT=5`(2~120s，默认 5)、
+    `FS_EKF_ACTION=1`(4.6 仅 1/2/3，4.7 起多 0=Report only)、`DISARM_DELAY=10`(0~127s)，后三项不勾选
+- 新增交叉校验：`TUNE_MIN < TUNE_MAX`、`RTL_ALT_FINAL ≤ RTL_ALT`。
+- 4.7 改名补 `RTL_ALT_FINAL → RTL_ALT_FINAL_M`(cm→m ×0.01)。
+
+### 文档核对 — `docs/AUTO模式专用速查表.md` 与固件不一致的 5 处(以官方参数表/源码为准)
+- `WPNAV_SPEED` 文档 2000~2500 → **固件上限 2000 cm/s**，按 2000 封顶。
+- `WPNAV_ACCEL` 文档 800~1500 → **固件上限 500 cm/s²**，按 500 封顶。
+- `WPNAV_ACCEL_Z` 文档 500~800 → **固件上限 500 cm/s²**，按 500 封顶。
+- `WPNAV_JERK` 文档 15~30 → 范围 1~20，上限按 20。
+- `EK3_POS_M_NSE` 实际参数名是 **`EK3_POSNE_M_NSE`**。
+- 另核对：`WP_YAW_BEHAVIOR` 多旋翼默认是 **2**(不是 1)；`FS_GCS_TIMEOUT` 范围 2~120s 默认 5；
+  `DISARM_DELAY` 范围 0~127s 默认 10；`TUNE=10` = WP Speed，需 `RCx_OPTION=219`。
+- 文档中的 `SPLINE_WAYPOINT` / `DO_CHANGE_SPEED` / `LOITER_TIME` 属**任务命令**(非参数)，
+  转入帮助说明并提示需在任务规划器里加。
+
+### 帮助与说明
+- `OT_HELP` 重写为 10 节：用途三选一、GUIDED/AUTO 分流流程、第 4/5 阶段四列取值表
+  (首飞/GUIDED/AUTO)、含 AUTO 的文档纠正 8 条、症状对照补 AUTO 5 条、
+  「九、AUTO 任务模式专属(15 项 + 任务命令)」、「十、GUIDED vs AUTO 怎么选」对比表。
+- 生成方案/写入完成报告按用途分支给出下一步（AUTO: 上传航线 → 试跑短航线 → 紧急退出）。
+- README 用途表改 3 行、阶段表补 AUTO 专属项与 AUTO 校验项；标题改为
+  「8 阶段 57 项 / AUTO 72 项」。
+- 测试：`test_onetouch.py` 新增 AUTO 覆盖(72/54、15 项存在性与取值、勾选状态、别名换算、
+  档位联动、`TUNE_MIN<TUNE_MAX` / `RTL_ALT_FINAL≤RTL_ALT` 校验)，首飞/GUIDED 断言保持不变。
+
+### 界面 — 右侧「日志」列移到底部，与「报告 / 体检结果」同行
+- 右侧日志列一直挤占 Notebook 宽度(1400 宽下 tab 仅约 1019 可用)，调参列表的
+  「依据/说明」列被迫横向滚动。
+- 底部改为一行两栏：左 3/5 = `报告 / 体检结果`(原「一键首飞」页底部的 `ot_report`
+  上移)，右 2/5 = `日志`(`txt_log` 连同滚动条/配色 tag 整体搬家)，二者等高。
+- 连带效果：`center` 恢复 `rowconfigure(0, weight=1)`，Notebook 占满右侧宽度，
+  「一键首飞」参数表(57/72 项)不再有右侧遮挡；日志仍全局可见(切页不消失)。
+- 兼容：控件名 `self.ot_report` / `self.txt_log` 与 `log()`/`_ot_report()` 接口不变，
+  「清空报告」按钮、`_log_line` 行数截断逻辑沿用；底部条建在 `build_tab_*` 之前，
+  保证各页构造时已存在。
+- 验证：`py_compile` OK；UI 冒烟(两栏 y=0 同行、等高 163px、切页日志累加)；
+  `test_onetouch.py` / `test_batch12.py` ALL PASS。
+
+## v1.14 - 2026-10-06
+
+### 移除 — 「起飞调参」页 (与「一键首飞」完全重叠)
+- 预设 A/B/C 的 10 个参数全部是「一键首飞」第 2/3/5 阶段的子集，D(围栏)=第 8 阶段，
+  B/C 的差异仅是数值 → 已合并，删除 `TAKEOFF_PRESETS` / `_apm_takeoff_params` /
+  `TAKEOFF_HELP` 及整页 UI 与读写逻辑（`ai_pid_tune.py` −590 行）。
+- 独有内容已迁移：Guided 起飞流程、起飞前检查清单、症状对照 → 「一键首飞」帮助第六/七节。
+- 预设 E(PX4 对照) 随页移除：「一键首飞」按 ArduCopter 实现，非 APM_COPTER 直接提示不适用；
+  PX4 参数集仍由「AI建议」页的 `PX4_MC` 支持。
+- README 的「起飞调参」小节同步删除。
+
+### 新增 — 「用途」选择 + 外部坐标引导追踪 (按 `docs/外部坐标引导飞行.md`)
+- 左上角新增 **用途**: `首飞(安全保守)` / `外部坐标引导追踪`，驱动第 4、7 阶段的勾选与取值。
+- **新第 4 阶段「水平跟踪 (GUIDED 追踪)」9 项**（原第 4 阶段只有垂直参数，水平项完全缺失）:
+  `WPNAV_SPEED` / `WPNAV_ACCEL` / `WPNAV_JERK` / `WPNAV_RADIUS` /
+  `PSC_POSXY_P` / `PSC_VELXY_P` / `PSC_VELXY_I` / **`PSC_VELXY_FF`(速度前馈)** / `PSC_JERK_XY`，
+  按 用途×档位 取值（追踪 1200~2000 cm/s、400~500 cm/s²、Jerk 8~20、FF 0.2~0.5），
+  首飞模式只展示不勾选，避免一次改太多。
+- **第 5 阶段补 2 项**: `WPNAV_SPEED_DN`、`PSC_VELZ_FF`（目标高度连续变化时的高度前馈）。
+- **新第 7 阶段「定位与 EKF」4 项**（默认不勾选）: `EK3_POSNE_M_NSE` / `EK3_VELNE_M_NSE` /
+  `EK3_VELD_M_NSE` / `EK3_ALT_M_NSE`。
+- 4.7 改名补全: `WPNAV_SPEED→WP_SPD`、`WPNAV_ACCEL→WP_ACC`、`WPNAV_JERK→WP_JERK`、
+  `WPNAV_RADIUS→WP_RADIUS_M`、`WPNAV_SPEED_DN→WP_SPD_DN`(cm→m ×0.01)、
+  `PSC_POSXY_P→PSC_NE_POS_P`、`PSC_VELXY_P/I/FF→PSC_NE_VEL_P/I/FF`、
+  `PSC_JERK_XY→PSC_NE_JERK`、`PSC_VELZ_FF→PSC_D_VEL_FF`。
+- 新增交叉校验: `WPNAV_RADIUS<100` 配 `WPNAV_SPEED≥1500` 的"到不了"提示、
+  `WPNAV_SPEED_DN` 与 `WPNAV_SPEED_UP` 差距过大提示。
+
+### 修正 — 以 ArduPilot 源码/参数表核对 `docs` 中的取值与命名 (共 5 处)
+- `WPNAV_ACCEL` 固件范围 **50~500 cm/s²**，文档的 800~1500 超范围 → 本工具按 500 封顶。
+- `WPNAV_JERK` 范围 **1~20 m/s³**(默认 1)，文档"10~30"的上限无效。
+- `EK3_POS_M_NSE` 实际叫 **`EK3_POSNE_M_NSE`**(0.1~10m，默认 0.5)。
+- **EKF 噪声与"外部目标坐标精度"无关**：外部系统给的是目标点而非飞机自身位置，
+  非 RTK/双天线不要动 → 第 7 阶段默认不勾选并在帮助中说明。
+- 追踪作业半径较大时 `FENCE_RADIUS`(50m) 需 ≥ 作业半径 → 生成方案时提示。
+- 帮助新增「地面站侧检查清单」: 坐标系 `MAV_FRAME_GLOBAL_RELATIVE_ALT_INT`、
+  `type_mask` 位置/位置+速度两套掩码、≥5Hz(推荐 10~20Hz)、速度单位 m/s、
+  绝对高程减起飞点高程、`GUID_OPTIONS` 保持 0、紧急退出与 `FS_GCS_ENABLE`。
+
+
+## v1.13 - 2026-10-06
+
+### Added — `ai_pid_tune.py` 新增「一键首飞」页 (按调参顺序文档 7 阶段 42 项全自动)
+- 输入 **桨径 / 电池串数 / 悬停油门 / 档位(更保守·标准·更激进) / 电调是否已线性化**，
+  一键生成全量方案 → 体检读取 → 校验 → 备份 → 写入 → 报告，全部带"依据"列。
+- **自动派生（文档没有、按 ArduPilot 官方文档补的）**:
+  - `MOT_BAT_VOLT_MAX/MIN = 4.2/3.3 × 串数`；`BATT_LOW_VOLT/CRT_VOLT = 3.5/3.3 × 串数`
+    （固件默认 `BATT_LOW_VOLT=10.5V`，6S 机器低压保护等于没开）
+  - `PSC_ACCZ_P = MOT_THST_HOVER`、`PSC_ACCZ_I = 2 × 悬停油门`，
+    4.7 固件自动改写 `PSC_D_ACC_P/I` 并**缩小 10 倍**（照抄文档会大 10 倍）
+  - `ATC_RAT_*_FLTD/FLTT = INS_GYRO_FILTER / 2`（优先取体检实测值）
+  - `MOT_THST_EXPO` 按桨径 5寸0.55 / 10寸0.65 / 20寸0.75（**纠正文档**："大桨降到0.2~0.3"
+    只适用于电调已内置线性化，勾选该开关才取 0.10）
+  - `TKOFF_SLEW_TIME` 按桨径 1~2s（文档给 0.5~1.0，固件默认 2.0，范围 0.25~5.0）
+  - `ATC_ACCEL_P/R/Y_MAX` 按桨径（官方 10寸=1100 / 20寸=500 / 30寸=200，偏航更保守）
+  - 围栏：**半径 50m**（文档写 20m 低于固件下限 30m）、`RTL_ALT=1000cm ≤ FENCE_ALT_MAX`
+- **拆桨自动实测起转点**：`MAV_CMD_DO_MOTOR_TEST` 从 6% 逐档升油门，
+  用 `ESC_TELEMETRY_1_TO_4` RPM>0 判定 4 个电机起转点 → 自动算 `MOT_SPIN_ARM/MIN` 填回方案表。
+- **校准自动化**：陀螺/气压/水平一键触发；六面加速度计向导按
+  `MAV_CMD_ACCELCAL_VEHICLE_POS` 协议逐面提示并自动回确认。
+- 交叉校验：`MOT_SPIN_MIN ≥ ARM+0.03`、`FENCE_ALT_MAX ≥ RTL_ALT`、`BATT_CRT ≤ BATT_LOW`、
+  固件范围；校准进行中自动屏蔽其它串口任务避免抢消息。
+
+### Fixed
+- `_do_fetch_from_fc` 使用未定义的 `self.master` → `self.mav_master`（原先必抛异常，
+  导致"从飞控获取参数"无法自动回填电池 S 数等表单）。
+- 起飞调参帮助补充：与文档不一致的两处（`MOT_THST_EXPO` 桨径曲线、`PSC_ACCZ_*` 4.7 缩放）
+  并指向「一键首飞」页。
+
+
 ## v1.12 - 2026-10-06
 
 ### Added — `ai_pid_tune.py` 新增「起飞调参」页 (首飞参数预设 + 帮助说明)

@@ -18,7 +18,7 @@
 | `px4_control_ui.py` | GUI | PX4 图形控制台 |
 | `px4_control_test.py` | 库 | PX4 测试与控制函数 |
 | `px4_control.py` | CLI | PX4 命令行控制脚本 |
-| `ai_pid_tune.py` | GUI | AI PID 调参独立界面（含「起飞调参」首飞参数预设） |
+| `ai_pid_tune.py` | GUI | AI PID 调参独立界面（「一键首飞」8 阶段自动调参，用途分 首飞 / GUIDED 追踪 / AUTO 任务航点） |
 | `ai_tune_core.py` | 库 | 调参核心引擎（参数表、飞行试验、日志分析、DeepSeek 调用） |
 | `CHANGELOGS.MD` | 文档 | 逐版本开发日志 |
 
@@ -160,25 +160,58 @@ AI 输出会被**夹紧到安全范围**内再应用。
 
 支持模型下拉：`deepseek-flash`、`deepseek-v4-pro`。
 
-### 起飞调参（首飞参数预设）
+### 一键首飞（8 阶段 57 项 / AUTO 72 项 · 全自动派生）
 
-「起飞调参」页内置一套**保守可实验**的垂直起飞参数起点，每行都带用法说明：
+> 早期的「起飞调参」页与本页参数完全重叠（预设 A/B/C 就是第 3/5 阶段的子集，
+> D 是第 8 阶段，E 是 PX4 对照），已合并移除；帮助说明里的 Guided 起飞流程、
+> 检查清单与症状对照一并迁入本页「📖 帮助」。
 
-| 预设 | 内容 |
-|------|------|
-| **A 保守首飞起点** | `MOT_SPIN_ARM=0.10` / `MOT_SPIN_MIN=0.15` / `MOT_SPIN_MAX=0.95` / `MOT_THST_HOVER=0.25` / `MOT_HOVER_LEARN=2` / `TKOFF_THR_MAX=1.0` / `WPNAV_SPEED_UP=100` / `WPNAV_ACCEL_Z=150` / `PILOT_SPEED_UP=100` / `PILOT_ACCEL_Z=200` |
-| **B 离地太猛→更慢** | A 同款，上升速度降到 80 cm/s、垂直加速度 120 cm/s²（推重比大的机器） |
-| **C 离地犹豫/贴地→更快** | 上升速度 150 cm/s、垂直加速度 200 cm/s² |
-| **D 地理围栏** | `FENCE_ENABLE/TYPE/ACTION/RADIUS=50m/ALT_MAX=20m/MARGIN` + `RTL_ALT=1000cm`，越界 RTL |
-| **E PX4 保守起飞** | `MPC_TKO_SPEED=1.0` / `MPC_Z_V_AUTO_UP=1.0` / `MPC_Z_VEL_MAX_UP=1.5` / `MPC_ACC_UP_MAX=3.0` / `MIS_TAKEOFF_ALT=2.0` |
+填 **用途 / 桨径 / 电池串数 / 悬停油门 / 档位** →
+**① 生成方案 → ② 读取当前值体检 → ③ 一键写入（自动备份）**。
+GUIDED 与 AUTO 底层共用 WPNAV 导航层，第 1/2/3/5/6/8 阶段完全通用，不另开页签。
 
-- 选中参数即在下方显示**用法说明**；右上「📖 完整帮助说明」含 Guided 起飞流程、
-  起飞前检查清单与症状对照。
-- 「读取当前值」自动探测真实参数名：ArduPilot 4.7 起 `PILOT_SPEED_UP → PILOT_SPD_UP`、
-  `WPNAV_SPEED_UP → WP_SPD_UP` 等改名并换成 SI 单位，本工具按单位换算后再显示/写入。
-- 「应用勾选」**先自动备份**到 `ai_tune_backups/`，并做一致性校验
-  （`MOT_SPIN_MIN ≥ MOT_SPIN_ARM + 0.03`、`FENCE_ALT_MAX ≥ RTL_ALT`、固件合法范围）。
-- 双击「推荐值」可改值，默认**跳过已与推荐值一致的项**。
+顶栏连接区另有 **重启飞控** 按钮（连接后才可用）：**已解锁直接拒绝**、
+任务运行中禁止、二次确认后发 `MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN(param1=1)`，
+等心跳中断 ≥2.5s 判定重启开始（约 10~30s 后重新上线，重启后请「断开」再「连接」）。
+
+**用途三选一**（决定第 4、5、7、8 阶段的取值与勾选）：
+
+| 用途 | 项数 | 行为 |
+|------|------|------|
+| 首飞(安全保守) | 57 | 先把机器安全飞起来；第 4 阶段(水平导航)、第 7 阶段(EKF)只展示不勾选 |
+| GUIDED 外部引导追踪 | 57 | 给「地面站 10~20Hz 发 `SET_POSITION_TARGET_GLOBAL_INT` 追移动目标」用，第 4 阶段按移动目标推荐值勾选（含 `PSC_VELXY_FF` 速度前馈） |
+| AUTO 任务航点 | **72** | 给「上传航线按航点执行」用；第 4/5 阶段改走 AUTO 文档区间，并追加 **15 项**：`WP_YAW_BEHAVIOR`、`TUNE/TUNE_MIN/TUNE_MAX`（机上旋钮调速）、`AHRS_EKF_TYPE/EK3_ENABLE/EK3_SRC1_*` 数据源体检、`RTL_ALT_FINAL/FS_GCS_TIMEOUT/FS_EKF_ACTION/DISARM_DELAY` 任务安全 |
+
+| 阶段 | 自动派生规则 |
+|------|--------------|
+| 1 电池与推力曲线 | `MOT_BAT_VOLT_MAX/MIN = 4.2/3.3 × 串数`、`BATT_LOW/CRT_VOLT = 3.5/3.3 × 串数`、`MOT_THST_EXPO` 按桨径(5寸0.55/10寸0.65/20寸0.75)，电调已线性化才取 0.10 |
+| 2 电机怠速 | `MOT_SPIN_ARM/MIN/MAX`，可**拆桨自动实测起转点**（ESC 遥测 RPM 判定；**两次确认**：说明弹窗 + 必须勾选「已拆桨」才能开始） |
+| 3 起飞 | `TKOFF_THR_MAX`、`TKOFF_SLEW_TIME` 按桨径 1~2s |
+| **4 水平导航 WPNAV** | `WPNAV_SPEED/ACCEL/JERK/RADIUS`、`PSC_POSXY_P`、`PSC_VELXY_P/I`、**`PSC_VELXY_FF` 速度前馈**、`PSC_JERK_XY` —— 按 用途×档位 取值；AUTO 另加 `WP_YAW_BEHAVIOR`、`TUNE/TUNE_MIN/TUNE_MAX` |
+| 5 垂直与高度 | `WPNAV_SPEED_UP/SPEED_DN/ACCEL_Z`、`PILOT_*`、`PSC_ACCZ_P = MOT_THST_HOVER`、`PSC_ACCZ_I = 2 × 悬停油门`、`PSC_JERK_Z`、**`PSC_VELZ_FF` 高度前馈**（AUTO 用途按 300~500 / 200~400 / ≤500 / 10~20 放开） |
+| 6 滤波与姿态 | `ATC_RAT_*_FLTD/FLTT = INS_GYRO_FILTER / 2`（取体检实测值）、`INS_HNTCH_ENABLE/MODE`、`ATC_ACCEL_*_MAX` 按桨径 |
+| 7 定位与 EKF（可选） | `EK3_POSNE/VELNE/VELD/ALT_M_NSE`，**默认不勾选**；AUTO 用途另展示 `AHRS_EKF_TYPE`、`EK3_ENABLE`、`EK3_SRC1_POSXY/VELXY/POSZ/VELZ/YAW` 数据源 |
+| 8 安全与保护 | `FS_GCS_ENABLE=1`、`BATT_FS_*` 动作+阈值、`FENCE_*`、`RTL_ALT`；AUTO 用途另加 `RTL_ALT_FINAL`、`FS_GCS_TIMEOUT`、`FS_EKF_ACTION`、`DISARM_DELAY` |
+
+- **AUTO 与 GUIDED 的差异按 `docs/AUTO模式专用速查表.md` 实现**：航点速度/加速度/航向行为/
+  任务安全/机上旋钮调参；`SPLINE`、`DO_CHANGE_SPEED`、`LOITER_TIME` 属于任务命令，
+  帮助里给出说明（不是参数，需在任务规划器里加）。
+- **4.7 改名/换算全自动**：`PSC_ACCZ_P/I → PSC_D_ACC_P/I`（数值缩小 10 倍）、
+  `PSC_POSXY_P → PSC_NE_POS_P`、`PSC_VELXY_* → PSC_NE_VEL_*`、`PSC_VELZ_FF → PSC_D_VEL_FF`、
+  `WPNAV_SPEED/ACCEL/RADIUS → WP_SPD/WP_ACC/WP_RADIUS_M`（cm→m 换算）、
+  `RTL_ALT_FINAL → RTL_ALT_FINAL_M`、`PILOT_SPD_UP`、`WP_SPD_UP`、`ATC_ACC_*_MAX`、
+  `RTL_ALT_M` 等按固件实际参数名探测并换算。
+- **与文档不一致处按官方参数表实现**：`WPNAV_SPEED` 上限 2000（AUTO 文档的 2000~2500 超范围）、
+  `WPNAV_ACCEL` 范围 50~500（两份文档的 800~1500 都超范围，按 500 封顶）、
+  `WPNAV_ACCEL_Z` 上限 500（AUTO 文档 500~800）、`WPNAV_JERK` 范围 1~20（文档 10~30 / 15~30 的上限无效）、
+  `FENCE_RADIUS` 下限 30m、文档的 `EK3_POS_M_NSE` 实为 `EK3_POSNE_M_NSE`、
+  EKF 噪声只与**飞机自身**定位源有关（外部目标坐标不影响 EKF）。
+- **校准辅助**：陀螺 / 气压 / 水平一键触发，六面加速度计**向导弹你逐面摆放**。
+- 写入前自动做交叉校验（`MOT_SPIN_MIN ≥ ARM+0.03`、`FENCE_ALT_MAX ≥ RTL_ALT`、
+  `BATT_CRT ≤ BATT_LOW`、`WPNAV_RADIUS` 与高速的匹配、`TUNE_MIN < TUNE_MAX`、
+  `RTL_ALT_FINAL ≤ RTL_ALT`、固件范围），并自动备份到 `ai_tune_backups/`。
+- 「📖 帮助」含**地面站侧检查清单**（坐标系、`type_mask`、10~20Hz 更新率、速度前馈单位、
+  `GUID_OPTIONS`、紧急退出）、**AUTO 任务要点**与 **GUIDED vs AUTO 对比表**。
 
 ---
 

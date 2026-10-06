@@ -35,3 +35,5 @@ Thumbs.db
 # --- Git ---
 *.orig
 *.rej
+
+docs/
