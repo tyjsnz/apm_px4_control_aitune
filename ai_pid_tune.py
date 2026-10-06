@@ -8,6 +8,200 @@ _BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(_BASE, 'ai_tune_config.json')
 BACKUP_DIR = os.path.join(_BASE, 'ai_tune_backups')
 
+# ===== 首飞/起飞参数预设 (rng=固件合法范围, aliases=4.7 起改名+换单位, scale=换算系数) =====
+def _apm_takeoff_params(speed_up, accel_z, pilot_speed_up):
+    return [
+        dict(name='MOT_SPIN_ARM', value=0.10, unit='', rng=(0.0, 0.2),
+             desc='解锁后电机最低转速',
+             help='拆桨后用地面站电机测试逐步升油门，记录电机"刚好稳定起转"的油门；实测约 12% 就填 0.14。\n'
+                  '必须小于 MOT_SPIN_MIN（至少低 0.03），否则解锁后可能不转或转速跳变。'),
+        dict(name='MOT_SPIN_MIN', value=0.15, unit='', rng=(0.0, 0.25),
+             desc='飞行最低油门下限',
+             help='必须大于 MOT_SPIN_ARM，建议至少高 0.03；\n'
+                  '它是油门线性区下限，过低会导致起飞段输出不线性、离地瞬间抖动。'),
+        dict(name='MOT_SPIN_MAX', value=0.95, unit='', rng=(0.9, 1.0),
+             desc='最大输出上限(推力线性化顶点)',
+             help='固件默认 0.95：顶部约 5% 油门几乎不产生额外推力，留作余量。\n'
+                  '不要为了"更有力"设到 1.0，那会让油门在顶端饱和。'),
+        dict(name='MOT_THST_HOVER', value=0.25, unit='', rng=(0.125, 0.6875),
+             desc='悬停油门初始估计(0~1)',
+             help='首飞保守给 0.25，交给 MOT_HOVER_LEARN=2 自己学。\n'
+                  '估高 → Guided 起飞瞬间过猛(火箭机尤其危险)；估低 → 离地慢、反复贴地。\n'
+                  '经验区间 0.25~0.50；>0.65 动力不足，<0.15 推重比过大、降落困难。'),
+        dict(name='MOT_HOVER_LEARN', value=2, unit='', rng=(0, 2),
+             desc='悬停油门学习: 0=关 1=学 2=学并保存',
+             help='保持 2：在 AltHold/Loiter 悬停 ≥30s，落地并上锁后才写回 MOT_THST_HOVER。\n'
+                  '频繁更换载荷(相机/电池重量变化)时用 1，只学不存，重启回原值。'),
+        dict(name='TKOFF_THR_MAX', value=1.0, unit='', rng=(0.0, 1.0),
+             desc='起飞阶段允许的最大油门',
+             help='允许起飞段用满油门；真正"多快离地"由 WPNAV_SPEED_UP / WPNAV_ACCEL_Z 决定。\n'
+                  '动力严重不足时才需要下调，一般保持 1.0。'),
+        dict(name='WPNAV_SPEED_UP', value=speed_up, unit='cm/s', rng=(10, 1000),
+             aliases=[('WP_SPD_UP', 0.01)],
+             desc='Guided/AUTO 起飞上升速度',
+             help='离地手感最关键的参数(固件默认 250)。\n'
+                  '离地太猛 → 降到 80；离地犹豫、反复贴地 → 升到 120~150。\n'
+                  '单位 cm/s；4.7 起改名 WP_SPD_UP 且单位换 m/s，本工具自动识别换算。'),
+        dict(name='WPNAV_ACCEL_Z', value=accel_z, unit='cm/s/s', rng=(50, 500),
+             aliases=[('WP_ACC_Z', 0.01)],
+             desc='垂直加速度上限',
+             help='越小越"绵"(固件默认 100，范围 50~500)；首飞 100~200 合适。\n'
+                  '过大时到顶会冲高/回荡，过小则爬升像"电梯迟滞"。'),
+        dict(name='PILOT_SPEED_UP', value=pilot_speed_up, unit='cm/s', rng=(50, 500),
+             aliases=[('PILOT_SPD_UP', 0.01)],
+             desc='手动模式上升速度上限',
+             help='AltHold/Loiter 油门杆到底的最大爬升率(固件默认 250)。\n'
+                  '首飞先 100，低空手感确认后再回 250。'),
+        dict(name='PILOT_ACCEL_Z', value=200, unit='cm/s/s', rng=(50, 500),
+             aliases=[('PILOT_ACC_Z', 0.01)],
+             desc='手动模式垂直加速度',
+             help='固件默认 250，范围 50~500；调小更平滑。\n'
+                  '振动大的机器设过高会让高度出现"抖动"。'),
+    ]
+
+
+TAKEOFF_PRESETS = [
+    dict(id='apm1', fc='APM_COPTER',
+         label='A 保守首飞起点 (10项 · 推荐首飞)',
+         note='ArduCopter 垂直起飞的保守起点：先拆桨核对起转油门，再低空 2~3m 试飞。'
+              '离地快慢由 WPNAV_SPEED_UP / WPNAV_ACCEL_Z 决定，其余多数与固件默认一致。',
+         params=_apm_takeoff_params(100, 150, 100)),
+    dict(id='apm2', fc='APM_COPTER',
+         label='B 离地太猛 → 更慢 (推重比大/火箭机)',
+         note='A 的降速档：起飞上升 0.8 m/s、垂直加速度 1.2 m/s²。'
+              '首飞宁可慢一点离地，也不要为了响应快把悬停油门设高。',
+         params=_apm_takeoff_params(80, 120, 80)),
+    dict(id='apm3', fc='APM_COPTER',
+         label='C 离地犹豫/贴地 → 更快',
+         note='A 的提速档：起飞上升 1.5 m/s。'
+              '若升到 150 仍反复贴地，先核对 MOT_THST_HOVER 是否估低(用 MOT_HOVER_LEARN=2 学 30s)。',
+         params=_apm_takeoff_params(150, 200, 150)),
+    dict(id='apm_fence', fc='APM_COPTER',
+         label='D 地理围栏 (首飞安全兜底)',
+         note='首飞强烈建议一起写入：半径 50m + 高度 20m 的圆柱围栏，越界自动 RTL。'
+              'RTL_ALT 必须 ≤ FENCE_ALT_MAX，否则返航爬升会再次越界形成循环。',
+         params=[
+             dict(name='FENCE_ENABLE', value=1, unit='', rng=(0, 1),
+                  desc='启用地理围栏',
+                  help='0=关 1=开。配合 FENCE_ACTION=1 越界自动返航。\n'
+                       '注意：改动不会被持久保存的例外是 MAVLink/RC 临时开关，本项写入后断电仍有效。'),
+             dict(name='FENCE_TYPE', value=3, unit='', rng=(0, 7),
+                  desc='围栏类型位掩码',
+                  help='bit0=最高高度, bit1=圆形(圆心=home), bit2=多边形, bit3=最低高度。\n'
+                       '3 = 高度+圆形；多边形需先从 GCS 导入顶点，首飞用不到。固件默认 7。'),
+             dict(name='FENCE_ACTION', value=1, unit='', rng=(0, 5),
+                  desc='越界动作',
+                  help='0=仅报告, 1=RTL或LAND, 2=强制降落, 3=SmartRTL或RTL, 4=Brake或LAND。\n'
+                       '首飞用 1。设定为 0 等于没有围栏。'),
+             dict(name='FENCE_RADIUS', value=50, unit='m', rng=(30, 10000),
+                  desc='圆形围栏半径(米)',
+                  help='固件范围 30~10000m，20m 会被拒绝或夹到 30m。\n'
+                       '首飞建议 50m，给返航转弯留余量。'),
+             dict(name='FENCE_ALT_MAX', value=20, unit='m', rng=(10, 1000),
+                  desc='允许最大相对高度(米)',
+                  help='必须 ≥ RTL_ALT。想用 10m 高度围栏，先把 RTL_ALT 降到 800(8m)。'),
+             dict(name='FENCE_MARGIN', value=5, unit='m', rng=(1, 10),
+                  desc='距围栏的预留余量(米)',
+                  help='到达围栏前提前减速/刹停的缓冲距离，太小容易来不及刹住。'),
+             dict(name='RTL_ALT', value=1000, unit='cm', rng=(0, 10000),
+                  desc='返航爬升高度(厘米)',
+                  help='固件默认 1500(15m) > 20m 围栏的爬升安全余量，首飞调到 1000(10m) 更稳妥。\n'
+                       '4.7 起可能改名(按 m 计)，本工具自动识别。'),
+         ]),
+    dict(id='px4', fc='PX4_MC',
+         label='E PX4 保守起飞 (对照实现)',
+         note='PX4 多旋翼的保守起飞对照项(单位为 m / m/s，与 APM 预设不同)：'
+              '起飞速度与上升加速度均低于默认值，首飞目标 2m 悬停。',
+         params=[
+             dict(name='MPC_TKO_SPEED', value=1.0, unit='m/s', rng=(0.5, 8.0),
+                  desc='Takeoff 模式上升速度',
+                  help='固件默认 1.5 m/s；首飞取 1.0，离地更平顺。'),
+             dict(name='MPC_Z_V_AUTO_UP', value=1.0, unit='m/s', rng=(0.5, 8.0),
+                  desc='AUTO/任务模式上升速度上限',
+                  help='固件默认 3.0 m/s；用于 AUTO 起飞与任务爬升，首飞压到 1.0。'),
+             dict(name='MPC_Z_VEL_MAX_UP', value=1.5, unit='m/s', rng=(0.5, 8.0),
+                  desc='手动模式上升速度上限',
+                  help='固件默认 3.0 m/s；手动杆到底的最大爬升率，首飞 1.5。'),
+             dict(name='MPC_ACC_UP_MAX', value=3.0, unit='m/s²', rng=(2.0, 15.0),
+                  desc='上升加速度上限',
+                  help='固件默认 4.0，范围 2~15；越小越平滑，过小则爬升迟钝。'),
+             dict(name='MIS_TAKEOFF_ALT', value=2.0, unit='m', rng=None,
+                  desc='Takeoff 指令目标高度',
+                  help='固件默认 2.5m；首飞 2m 起步，稳定后再加高。'),
+         ]),
+]
+
+TAKEOFF_HELP = """起飞调参 · 帮助说明
+========================================================
+一、这是什么
+  一套"保守可实验"的垂直起飞参数起点，先低空起飞测试，不要一上来就追求快起飞。
+  预设 D(地理围栏) 建议和 A 一起写入，作为首飞的最后安全网。
+
+二、推荐首飞参数起点 (与上表一致)
+  MOT_SPIN_ARM   0.10  解锁后电机最低转速
+  MOT_SPIN_MIN   0.15  飞行最低油门下限(必须 > SPIN_ARM 至少 0.03)
+  MOT_SPIN_MAX   0.95  最大输出上限
+  MOT_THST_HOVER 0.25  悬停油门初始估计
+  MOT_HOVER_LEARN  2   让飞控学习并保存真实悬停油门
+  TKOFF_THR_MAX  1.0   起飞阶段允许最大油门
+  WPNAV_SPEED_UP 100   起飞上升速度 (cm/s)
+  WPNAV_ACCEL_Z  150   垂直加速度 (cm/s/s)
+  PILOT_SPEED_UP 100   手动模式上升速度上限 (cm/s)
+  PILOT_ACCEL_Z  200   手动模式垂直加速度 (cm/s/s)
+
+三、这些值怎么用
+  · MOT_SPIN_ARM=0.10：先拆桨，在地面站电机测试里逐步提高油门，确认电机刚好稳定起转。
+    如果实际起转点在 12%，改成 0.14 左右。
+  · MOT_SPIN_MIN=0.15：必须大于 MOT_SPIN_ARM，至少高 0.03。
+  · MOT_THST_HOVER=0.25：先保守估计，别一上来就设高。推重比大的机器真实悬停油门可能更低，
+    保留 0.25 让飞控学习。
+  · TKOFF_THR_MAX=1.0：允许起飞用满油门，但真正起飞速度由 WPNAV_SPEED_UP/WPNAV_ACCEL_Z 控制。
+  · WPNAV_SPEED_UP=100、WPNAV_ACCEL_Z=150：Guided 起飞最关键的两项。默认上升速度通常偏快，
+    首飞建议降到 100 cm/s，让它慢慢离地。
+
+四、MAVLink Guided 起飞建议流程
+  1. 先切 STABILIZE，解锁，低油门确认姿态稳定。
+  2. 切 GUIDED。
+  3. 发送 MAV_CMD_NAV_TAKEOFF，目标高度先设 2~3 米。
+  4. 起飞后观察：离地太猛 → WPNAV_SPEED_UP 降到 80；离地犹豫、反复贴地 → 升到 120~150。
+  5. 首次不要飞高，2~3 米悬停几秒后切 RTL 或手动降落。
+
+五、特别注意
+  · 推力大的机器若 MOT_THST_HOVER 估高，Guided 起飞瞬间会过猛；估低则离地慢。
+    首飞宁可慢一点离地，也不要为了响应快把悬停油门设高。
+  · Guided 起飞前确认 GPS/EKF 定位可靠，并设置低高度地理围栏(建议半径 50m、高度 20m)。
+
+--------------------------------------------------------
+六、本工具补充 (务必先读)
+  1) 固件版本差异：ArduPilot 4.7 起大量参数改名并换成 SI 单位
+       PILOT_SPEED_UP(cm/s) → PILOT_SPD_UP(m/s)
+       PILOT_ACCEL_Z(cm/s/s) → PILOT_ACC_Z(m/s/s)
+       WPNAV_SPEED_UP/WPNAV_ACCEL_Z → WP_SPD_UP/WP_ACC_Z
+     本页"读取当前值"会自动探测实际存在的参数名，并按单位换算后再显示/写入，
+     所以 4.6 与 4.7 固件都能用同一套推荐值(按 cm/s 填)。
+  2) 写入前自动备份：点"应用勾选"会先把选中参数的当前值存进 ai_tune_backups/，
+     出问题可到「备份管理」页一键回滚。
+  3) 只写不同的项：勾选后，当前值已等于推荐值的参数会被跳过，减少无谓写入。
+  4) 一致性校验：应用前会检查 MOT_SPIN_MIN > MOT_SPIN_ARM+0.03、
+     FENCE_ALT_MAX >= RTL_ALT、数值是否落在固件合法范围，被拒绝时请按提示改。
+  5) 参数生效时机：本页参数多数立即生效，无需重启；但 MOT_PWM_TYPE、遥控协议等
+     需要重启才生效。改完建议重启飞控再试飞。
+  6) 拆桨地面验证顺序：
+     写入参数 → 拆桨 → 电机测试核对 MOT_SPIN_ARM 起转点 → 装桨 →
+     STABILIZE 低油门看姿态 → GUIDED 起飞 2~3m → RTL/降落 → 落地保持 Loiter ≥30s
+     (让 MOT_HOVER_LEARN=2 学习并保存悬停油门) → 上锁。
+  7) 起飞前检查清单：
+     GPS 3D 定位且卫星 ≥10、EKF/地磁就绪、ARMING_CHECK 全开、遥控失控保护已设、
+     低电压保护已设、罗盘已校准、桨叶方向与型号正确、电池电压足够、场地空旷无人。
+  8) 症状对照：
+     离地太猛/窜天      → 降 WPNAV_SPEED_UP、核对 MOT_THST_HOVER 是否偏大
+     离地犹豫/反复贴地  → 升 WPNAV_SPEED_UP、核对 MOT_THST_HOVER 是否偏小
+     到顶冲高回荡        → 降 WPNAV_ACCEL_Z
+     高度抖动            → 检查振动(桨/机架)、降 PILOT_ACCEL_Z
+     RTL 后又越界        → FENCE_ALT_MAX 必须 ≥ RTL_ALT
+  9) 建议开着日志(LOG_BITMASK 保留基础项)飞行，事后用「日志管理」回看。
+"""
+
 def _is_checked(value):
     """Treeview 的值读回来是字符串，'False' 也是非空字符串，必须显式判断。"""
     return str(value).strip().lower() in ('✓', 'true', '1', 'y', 'yes')
@@ -400,6 +594,7 @@ class App(tk.Tk):
         
         self.build_tab_ai()
         self.build_tab_params()
+        self.build_tab_takeoff()
         self.build_tab_history()
         self.build_tab_backup()
         self.build_tab_logs()
@@ -472,6 +667,387 @@ class App(tk.Tk):
             self.param_tree.heading(c, text=t)
             self.param_tree.column(c, width=w, anchor='center' if c != 'name' else 'w')
         self.param_tree.pack(fill='both', expand=True, pady=5)
+
+    def build_tab_takeoff(self):
+        f = ttk.Frame(self.nb, padding=6)
+        self.nb.add(f, text=' 起飞调参 ')
+
+        tb = ttk.Frame(f)
+        tb.pack(fill='x', pady=(0, 3))
+        ttk.Label(tb, text='预设:').pack(side='left')
+        self.preset_var = tk.StringVar()
+        self.preset_cb = ttk.Combobox(
+            tb, textvariable=self.preset_var,
+            values=[p['label'] for p in TAKEOFF_PRESETS], state='readonly', width=42)
+        self.preset_cb.pack(side='left', padx=5)
+        self.preset_cb.bind('<<ComboboxSelected>>', self.on_preset_change)
+        ttk.Button(tb, text='📖 完整帮助说明', command=self.on_takeoff_help).pack(side='left', padx=5)
+        ttk.Button(tb, text='读取当前值', command=self.on_takeoff_read).pack(side='left', padx=5)
+        self.takeoff_status = ttk.Label(tb, text='未连接', foreground='gray')
+        self.takeoff_status.pack(side='right', padx=5)
+
+        tb2 = ttk.Frame(f)
+        tb2.pack(fill='x', pady=(0, 3))
+        ttk.Button(tb2, text='全选', command=lambda: self._takeoff_check_all(True)).pack(side='left', padx=3)
+        ttk.Button(tb2, text='全不选', command=lambda: self._takeoff_check_all(False)).pack(side='left', padx=3)
+        ttk.Button(tb2, text='只勾选与推荐值不同的项', command=self._takeoff_check_diff).pack(side='left', padx=3)
+        self.takeoff_only_diff = tk.BooleanVar(value=True)
+        ttk.Checkbutton(tb2, text='应用时跳过已一致的项',
+                        variable=self.takeoff_only_diff).pack(side='left', padx=8)
+        ttk.Button(tb2, text='应用勾选（先自动备份）',
+                   command=self.on_takeoff_apply).pack(side='right', padx=3)
+
+        cols = ('check', 'name', 'rec', 'cur', 'delta', 'unit', 'desc')
+        self.takeoff_tree = ttk.Treeview(f, columns=cols, show='headings', height=14)
+        for c, w, t in (('check', 56, '勾选'), ('name', 150, '参数名'),
+                        ('rec', 110, '推荐值(双击改)'), ('cur', 90, '当前值'),
+                        ('delta', 90, '差异'), ('unit', 70, '单位'),
+                        ('desc', 330, '作用')):
+            self.takeoff_tree.heading(c, text=t)
+            self.takeoff_tree.column(c, width=w, anchor='w' if c in ('name', 'desc') else 'center')
+        self.takeoff_tree.pack(fill='both', expand=True, pady=3)
+        self.takeoff_tree.tag_configure('same', background='#1e3a2a')
+        self.takeoff_tree.tag_configure('diff', background='#3a3a2a')
+        self.takeoff_tree.tag_configure('missing', background='#3a1e1e')
+        self.takeoff_tree.bind('<Button-1>', lambda e: self.on_check_click(self.takeoff_tree, e, 1))
+        self.takeoff_tree.bind('<Double-1>', self.on_takeoff_edit)
+        self.takeoff_tree.bind('<<TreeviewSelect>>', self.on_takeoff_select)
+
+        ttk.Label(f, text='帮助说明（选中参数显示其用法；右上"📖 完整帮助说明"看全流程）:').pack(anchor='w')
+        self.takeoff_help = tk.Text(f, height=7, wrap='word', bg='#1e1e1e', fg='#d4d4d4')
+        self.takeoff_help.pack(fill='x', pady=2)
+
+        self.takeoff_rows = []
+        self.takeoff_preset = None
+        self.preset_var.set(TAKEOFF_PRESETS[0]['label'])
+        self._fill_takeoff_tree()
+
+    def _fill_takeoff_tree(self):
+        label = self.preset_var.get()
+        preset = next((p for p in TAKEOFF_PRESETS if p['label'] == label),
+                      TAKEOFF_PRESETS[0])
+        self.takeoff_preset = preset
+        self.takeoff_tree.delete(*self.takeoff_tree.get_children())
+        self.takeoff_rows = []
+        for e in preset['params']:
+            iid = self.takeoff_tree.insert(
+                '', 'end',
+                values=('', e['name'], self._fmt_toff(e['value']), '—', '—',
+                        e.get('unit') or '', e['desc']))
+            self.takeoff_rows.append(dict(iid=iid, entry=e, name=e['name'],
+                                          scale=1.0, current=None))
+        self._set_takeoff_help('%s\n\n%s' % (preset['note'],
+                                             '双击"推荐值"单元格可直接改值；'
+                                             '点"读取当前值"后会自动算出差异并按需勾选。'))
+        self._update_takeoff_status()
+
+    def _update_takeoff_status(self):
+        if not getattr(self, 'takeoff_status', None):
+            return
+        if not self.connected:
+            self.takeoff_status.configure(text='未连接', foreground='gray')
+            return
+        fc = self.fc_type or '未识别'
+        want = self.takeoff_preset['fc'] if self.takeoff_preset else ''
+        ok = (want == fc)
+        self.takeoff_status.configure(
+            text=f'飞控 {fc} / 预设 {want}' + ('  ✓' if ok else '  ⚠ 可能不匹配'),
+            foreground=('green' if ok else 'orange'))
+
+    def _fmt_toff(self, v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if v == int(v) and abs(v) < 1e6:
+            return str(int(v))
+        return f'{v:.4g}'
+
+    def _set_takeoff_help(self, text):
+        self.takeoff_help.configure(state='normal')
+        self.takeoff_help.delete('1.0', 'end')
+        self.takeoff_help.insert('1.0', text)
+        self.takeoff_help.configure(state='disabled')
+
+    def on_preset_change(self, event=None):
+        self._fill_takeoff_tree()
+
+    def on_takeoff_select(self, event=None):
+        sel = self.takeoff_tree.selection()
+        if not sel or not self.takeoff_preset:
+            return
+        iid = sel[0]
+        row = next((r for r in self.takeoff_rows if r['iid'] == iid), None)
+        if not row:
+            return
+        e = row['entry']
+        rng = e.get('rng')
+        lines = [f"【{e['name']}】{e['desc']}",
+                 f"推荐值 {self._fmt_toff(e['value'])} {e.get('unit') or ''}   "
+                 f"固件范围 {('%s ~ %s' % (rng[0], rng[1])) if rng else '未标注'}"]
+        if row.get('current') is not None:
+            lines.append(f"当前值 {self._fmt_toff(row['current'])}"
+                         f"（实际写入名 {row['name']}，系数 {row['scale']:g}）")
+        elif row.get('resolved'):
+            lines.append(f"当前值 读取失败（尝试名 {row['name']}）")
+        lines.append('')
+        lines.append(e['help'])
+        self._set_takeoff_help('\n'.join(lines))
+
+    def on_takeoff_edit(self, event=None):
+        col = self.takeoff_tree.identify_column(event.x)
+        if col != '#3':
+            return
+        iid = self.takeoff_tree.identify_row(event.y)
+        if not iid:
+            return
+        row = next((r for r in self.takeoff_rows if r['iid'] == iid), None)
+        if not row:
+            return
+        e = row['entry']
+        rng = e.get('rng')
+        try:
+            cur = float(self.takeoff_tree.set(iid, 'rec'))
+        except (TypeError, ValueError):
+            cur = e['value']
+        hint = f"{e['name']} （单位 {e.get('unit') or '无'}）"
+        if rng:
+            hint += f"\n固件合法范围: {rng[0]} ~ {rng[1]}"
+        hint += f"\n\n{e['help']}"
+        v = simpledialog.askfloat('编辑推荐值', hint, initialvalue=cur,
+                                  minvalue=(rng[0] if rng else -1e9),
+                                  maxvalue=(rng[1] if rng else 1e9), parent=self)
+        if v is None:
+            return
+        self.takeoff_tree.set(iid, 'rec', self._fmt_toff(v))
+        self._update_takeoff_delta(iid)
+
+    def _takeoff_parse_rec(self, iid):
+        try:
+            return float(self.takeoff_tree.set(iid, 'rec'))
+        except (TypeError, ValueError):
+            return None
+
+    def _update_takeoff_delta(self, iid, cur=None):
+        row = next((r for r in self.takeoff_rows if r['iid'] == iid), None)
+        if not row:
+            return
+        rec = self._takeoff_parse_rec(iid)
+        if rec is None:
+            self.takeoff_tree.set(iid, 'delta', '—')
+            return
+        if cur is None:
+            cur = row.get('current')
+        if cur is None:
+            self.takeoff_tree.set(iid, 'delta', '未读取')
+            self.takeoff_tree.item(iid, tags=('missing',))
+            return
+        if abs(cur) < 1e-9:
+            self.takeoff_tree.set(iid, 'delta', '—')
+            self.takeoff_tree.item(iid, tags=('diff',))
+            return
+        if abs(rec - cur) <= max(1e-6, abs(rec) * 0.005):
+            self.takeoff_tree.set(iid, 'delta', '一致')
+            self.takeoff_tree.item(iid, tags=('same',))
+            return
+        self.takeoff_tree.set(iid, 'delta', f'{(rec - cur) / cur * 100:+.1f}%')
+        self.takeoff_tree.item(iid, tags=('diff',))
+
+    def _takeoff_check_all(self, flag):
+        for r in self.takeoff_rows:
+            self.takeoff_tree.set(r['iid'], 'check', '✓' if flag else '')
+
+    def _takeoff_check_diff(self):
+        n = 0
+        for r in self.takeoff_rows:
+            rec = self._takeoff_parse_rec(r['iid'])
+            cur = r.get('current')
+            if rec is None:
+                continue
+            diff = (cur is None or abs(cur) < 1e-9 or
+                    abs(rec - cur) > max(1e-6, abs(rec) * 0.005))
+            self.takeoff_tree.set(r['iid'], 'check', '✓' if diff else '')
+            n += 1 if diff else 0
+        self.log(f'已勾选 {n} 项与推荐值不同的参数')
+
+    def on_takeoff_help(self):
+        win = tk.Toplevel(self)
+        win.title('起飞调参 · 完整帮助说明')
+        win.geometry('760x720')
+        txt = tk.Text(win, wrap='word', bg='#1e1e1e', fg='#d4d4d4',
+                      font=('Consolas', 10))
+        sb = ttk.Scrollbar(win, orient='vertical', command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y')
+        txt.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        txt.insert('1.0', TAKEOFF_HELP)
+        txt.configure(state='disabled')
+        ttk.Button(win, text='关闭', command=win.destroy).pack(side='bottom', pady=5)
+
+    # ===== 起飞调参：读取 / 应用 =====
+    def _takeoff_check_fc(self):
+        if not self.takeoff_preset:
+            return False
+        want = self.takeoff_preset['fc']
+        if self.fc_type and self.fc_type != want:
+            return messagebox.askyesno(
+                '飞控类型不匹配',
+                f'当前预设「{self.takeoff_preset["label"]}」适用于 {want}，'
+                f'而连接的是 {self.fc_type}。\n参数名与单位都不同，写入多半会失败。仍要继续？')
+        return True
+
+    def _resolve_param(self, entry, timeout=0.9):
+        """按 原名→4.7新名 顺序探测，返回归一化(旧单位)的当前值。"""
+        cands = [(entry['name'], 1.0)] + [(n, s) for n, s in entry.get('aliases', [])]
+        first = None
+        for name, scale in cands:
+            v = get_param(self.mav_master, name, timeout=timeout)
+            if v is None:
+                continue
+            if first is None:
+                first = (name, v, scale)
+            if abs(v) > 1e-9:
+                return dict(name=name, scale=scale, value=v / scale)
+        if first:
+            name, v, scale = first
+            return dict(name=name, scale=scale, value=v / scale)
+        return dict(name=entry['name'], scale=1.0, value=None)
+
+    def on_takeoff_read(self):
+        if not self.connected:
+            messagebox.showwarning('提示', '请先连接飞控')
+            return
+        if not self._takeoff_check_fc():
+            return
+        n = len(self.takeoff_rows)
+        self.log(f'读取起飞预设参数 {n} 项...')
+        self.enqueue('读取起飞参数', self._do_takeoff_read)
+
+    def _do_takeoff_read(self):
+        out = []
+        for i, r in enumerate(self.takeoff_rows):
+            res = self._resolve_param(r['entry'])
+            out.append(res)
+            if res['value'] is None:
+                self.log(f'  [{i+1}/{len(self.takeoff_rows)}] {r["entry"]["name"]} 读取失败')
+            else:
+                self.log(f'  [{i+1}/{len(self.takeoff_rows)}] {r["name"]} = '
+                         f'{self._fmt_toff(res["value"])} {r["entry"].get("unit") or ""}')
+        self.after(0, lambda: self._show_takeoff_read(out))
+
+    def _show_takeoff_read(self, out):
+        for r, res in zip(self.takeoff_rows, out):
+            r['name'] = res['name']
+            r['scale'] = res['scale']
+            r['current'] = res['value']
+            cur_txt = '—' if res['value'] is None else self._fmt_toff(res['value'])
+            if res['value'] is not None and res['name'] != r['entry']['name']:
+                cur_txt += f' ({res["name"]})'
+            self.takeoff_tree.set(r['iid'], 'cur', cur_txt)
+            self._update_takeoff_delta(r['iid'])
+            if res['value'] is None:
+                self.takeoff_tree.set(r['iid'], 'check', '')
+        self._takeoff_check_diff()
+        self.log('✅ 起飞预设参数读取完成')
+
+    def on_takeoff_apply(self):
+        if not self.connected:
+            messagebox.showwarning('提示', '请先连接飞控')
+            return
+        if not self._takeoff_check_fc():
+            return
+        items = []
+        for r in self.takeoff_rows:
+            if not _is_checked(self.takeoff_tree.set(r['iid'], 'check')):
+                continue
+            rec = self._takeoff_parse_rec(r['iid'])
+            if rec is None:
+                messagebox.showwarning('提示', f'{r["entry"]["name"]} 的推荐值不是有效数字')
+                return
+            items.append((r, rec))
+        if not items:
+            messagebox.showinfo('提示', '没有勾选任何参数')
+            return
+        issues = []
+        for r, rec in items:
+            rng = r['entry'].get('rng')
+            if rng and not (rng[0] <= rec <= rng[1]):
+                issues.append(f'{r["entry"]["name"]}={rec} 超出固件范围 {rng[0]}~{rng[1]}')
+        values = {}
+        for r, rec in items:
+            values[r['entry']['name']] = rec
+            if r['entry']['name'] != r['name']:
+                values[r['name']] = rec * r['scale']
+        arm, mn = values.get('MOT_SPIN_ARM'), values.get('MOT_SPIN_MIN')
+        if arm is not None and mn is not None and mn < arm + 0.03 - 1e-9:
+            issues.append(f'MOT_SPIN_MIN({mn}) 必须 ≥ MOT_SPIN_ARM({arm}) + 0.03')
+        alt, rtl = values.get('FENCE_ALT_MAX'), values.get('RTL_ALT')
+        if alt is not None and rtl is not None and alt < rtl / 100.0 - 1e-9:
+            issues.append(f'FENCE_ALT_MAX({alt}m) 必须 ≥ RTL_ALT({rtl}cm = {rtl/100:.2f}m)，'
+                          '否则返航爬升会再次越界')
+        if issues:
+            if not messagebox.askyesno('参数校验未通过', '\n'.join(issues) +
+                                       '\n\n仍要写入吗？（不推荐）'):
+                return
+        skip = self.takeoff_only_diff.get()
+        pending = []
+        for r, rec in items:
+            cur = r.get('current')
+            if (skip and cur is not None and rec is not None
+                    and abs(rec - cur) <= max(1e-6, abs(rec) * 0.005)):
+                continue
+            pending.append((r, rec))
+        if not pending:
+            messagebox.showinfo('提示', '所有勾选项当前值已与推荐值一致，无需写入')
+            return
+        label = self.takeoff_preset['label']
+        listing = '\n'.join(
+            f'  {r["entry"]["name"]} → {self._fmt_toff(rec)} {r["entry"].get("unit") or ""}'
+            for r, rec in pending)
+        if not messagebox.askyesno(
+                '确认写入起飞预设',
+                f'预设: {label}\n将写入 {len(pending)} 个参数（写入前自动备份）:\n{listing}\n\n继续？'):
+            return
+        self.log(f'开始应用起飞预设「{label}」，共 {len(pending)} 项...')
+        self.enqueue('应用起飞预设',
+                     lambda: self._do_takeoff_apply(pending, label))
+
+    def _do_takeoff_apply(self, pending, label):
+        names = [r['name'] for r, _ in pending]
+        backup_path = backup_params(self.mav_master, names, self.get_spec_dict(),
+                                    tag='takeoff')
+        self.log(f'📦 已备份: {os.path.basename(backup_path)}')
+        success, failed = 0, []
+        for r, rec in pending:
+            e = r['entry']
+            val = rec * r['scale']
+            if set_param(self.mav_master, r['name'], val):
+                success += 1
+                extra = '' if abs(val - rec) < 1e-9 else f' (原 {self._fmt_toff(rec)}{e.get("unit") or ""})'
+                self.log(f'  ✅ {r["name"]} = {self._fmt_toff(val)}{extra}')
+            else:
+                failed.append(r['name'])
+                self.log(f'  ❌ {r["name"]} 写入失败')
+        self.after(0, lambda: self._after_takeoff_apply(success, failed,
+                                                        backup_path, label))
+
+    def _after_takeoff_apply(self, success, failed, backup_path, label):
+        if failed:
+            messagebox.showwarning('结果',
+                                   f'成功 {success} 个，失败 {len(failed)} 个: {", ".join(failed)}')
+        else:
+            messagebox.showinfo('结果', f'起飞预设「{label}」全部 {success} 个参数写入成功')
+        self.round += 1
+        self.history.append({
+            'round': self.round,
+            'time': time.strftime('%H:%M:%S'),
+            'written': success,
+            'summary': f'起飞预设: {label}',
+            'backup': os.path.basename(backup_path)
+        })
+        self.refresh_history()
+        if not failed:
+            self.on_takeoff_read()
 
     def build_tab_history(self):
         f = ttk.Frame(self.nb, padding=6)
@@ -641,6 +1217,7 @@ class App(tk.Tk):
             self.fc_lbl.configure(text=f'FC: {self.fc_type}')
             self.link_lbl.configure(text='● 已连接', foreground='green')
             self.log(f'✅ 已连接 {self.fc_type} (sysid={master.target_system})')
+            self._update_takeoff_status()
             self.config['last_port'] = self.port_var.get()
             self.config['baud'] = int(self.baud_var.get())
             self.save_config()
@@ -664,6 +1241,7 @@ class App(tk.Tk):
             disconnect(self.mav_master)
             self.mav_master = None
             self.fc_type = None
+        self._update_takeoff_status()
         self.log('已断开连接')
 
     # ===== Parameter operations =====

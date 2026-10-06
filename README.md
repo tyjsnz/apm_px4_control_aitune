@@ -18,7 +18,7 @@
 | `px4_control_ui.py` | GUI | PX4 图形控制台 |
 | `px4_control_test.py` | 库 | PX4 测试与控制函数 |
 | `px4_control.py` | CLI | PX4 命令行控制脚本 |
-| `ai_pid_tune.py` | GUI | AI PID 调参独立界面 |
+| `ai_pid_tune.py` | GUI | AI PID 调参独立界面（含「起飞调参」首飞参数预设） |
 | `ai_tune_core.py` | 库 | 调参核心引擎（参数表、飞行试验、日志分析、DeepSeek 调用） |
 | `CHANGELOGS.MD` | 文档 | 逐版本开发日志 |
 
@@ -159,6 +159,26 @@ python ai_pid_tune.py           # AI PID 调参
 AI 输出会被**夹紧到安全范围**内再应用。
 
 支持模型下拉：`deepseek-flash`、`deepseek-v4-pro`。
+
+### 起飞调参（首飞参数预设）
+
+「起飞调参」页内置一套**保守可实验**的垂直起飞参数起点，每行都带用法说明：
+
+| 预设 | 内容 |
+|------|------|
+| **A 保守首飞起点** | `MOT_SPIN_ARM=0.10` / `MOT_SPIN_MIN=0.15` / `MOT_SPIN_MAX=0.95` / `MOT_THST_HOVER=0.25` / `MOT_HOVER_LEARN=2` / `TKOFF_THR_MAX=1.0` / `WPNAV_SPEED_UP=100` / `WPNAV_ACCEL_Z=150` / `PILOT_SPEED_UP=100` / `PILOT_ACCEL_Z=200` |
+| **B 离地太猛→更慢** | A 同款，上升速度降到 80 cm/s、垂直加速度 120 cm/s²（推重比大的机器） |
+| **C 离地犹豫/贴地→更快** | 上升速度 150 cm/s、垂直加速度 200 cm/s² |
+| **D 地理围栏** | `FENCE_ENABLE/TYPE/ACTION/RADIUS=50m/ALT_MAX=20m/MARGIN` + `RTL_ALT=1000cm`，越界 RTL |
+| **E PX4 保守起飞** | `MPC_TKO_SPEED=1.0` / `MPC_Z_V_AUTO_UP=1.0` / `MPC_Z_VEL_MAX_UP=1.5` / `MPC_ACC_UP_MAX=3.0` / `MIS_TAKEOFF_ALT=2.0` |
+
+- 选中参数即在下方显示**用法说明**；右上「📖 完整帮助说明」含 Guided 起飞流程、
+  起飞前检查清单与症状对照。
+- 「读取当前值」自动探测真实参数名：ArduPilot 4.7 起 `PILOT_SPEED_UP → PILOT_SPD_UP`、
+  `WPNAV_SPEED_UP → WP_SPD_UP` 等改名并换成 SI 单位，本工具按单位换算后再显示/写入。
+- 「应用勾选」**先自动备份**到 `ai_tune_backups/`，并做一致性校验
+  （`MOT_SPIN_MIN ≥ MOT_SPIN_ARM + 0.03`、`FENCE_ALT_MAX ≥ RTL_ALT`、固件合法范围）。
+- 双击「推荐值」可改值，默认**跳过已与推荐值一致的项**。
 
 ---
 
