@@ -213,38 +213,220 @@ def restore_backup(master, backup_path):
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
-def deepseek_chat(api_key, system_prompt, user_prompt, model="deepseek-flash", timeout=60):
-    if not api_key:
-        return None, "API Key 未填写"
-    headers = {"Content-Type": "application/json", "Authorization": "Bearer " + api_key}
-    payload = {"model": model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "temperature": 0.3, "stream": False}
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = request.Request(DEEPSEEK_API_URL, data=data, headers=headers, method="POST")
-    for attempt in range(3):
+# type: openai = OpenAI Chat Completions 兼容协议; anthropic / gemini = 各自私有协议
+AI_PROVIDERS = {
+    "deepseek": {
+        "label": "DeepSeek", "type": "openai",
+        "base_url": "https://api.deepseek.com",
+        "models": ["deepseek-flash", "deepseek-v4-pro"],
+    },
+    "openai": {
+        "label": "OpenAI", "type": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "models": ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"],
+    },
+    "anthropic": {
+        "label": "Anthropic Claude", "type": "anthropic",
+        "base_url": "https://api.anthropic.com",
+        "models": ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5", "claude-opus-4-8", "claude-fable-5"],
+    },
+    "gemini": {
+        "label": "Google Gemini", "type": "gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "models": ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash"],
+    },
+    "qwen": {
+        "label": "通义千问 Qwen", "type": "openai",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "models": ["qwen-max", "qwen-plus", "qwen-turbo", "qwen3-max"],
+    },
+    "glm": {
+        "label": "智谱 GLM", "type": "openai",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "models": ["glm-4.6", "glm-4.5", "glm-4-flash", "glm-4-plus"],
+    },
+    "kimi": {
+        "label": "Kimi 月之暗面", "type": "openai",
+        "base_url": "https://api.moonshot.cn/v1",
+        "models": ["kimi-k2.6", "moonshot-v1-128k", "moonshot-v1-8k"],
+    },
+    "doubao": {
+        "label": "豆包 火山方舟", "type": "openai",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "models": ["doubao-1-5-pro-32k", "doubao-pro-32k", "doubao-lite-4k"],
+    },
+    "openrouter": {
+        "label": "OpenRouter 聚合", "type": "openai",
+        "base_url": "https://openrouter.ai/api/v1",
+        "models": ["deepseek/deepseek-chat", "openai/gpt-5.6", "anthropic/claude-sonnet-5", "google/gemini-3.5-flash", "moonshotai/kimi-k2.6"],
+    },
+    "groq": {
+        "label": "Groq", "type": "openai",
+        "base_url": "https://api.groq.com/openai/v1",
+        "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
+    },
+    "mistral": {
+        "label": "Mistral", "type": "openai",
+        "base_url": "https://api.mistral.ai/v1",
+        "models": ["mistral-large-latest", "mistral-small-latest"],
+    },
+    "ollama": {
+        "label": "Ollama 本地", "type": "openai",
+        "base_url": "http://localhost:11434/v1",
+        "models": ["qwen3:8b", "llama3.1:8b", "deepseek-r1:8b"],
+        "key_optional": True,
+    },
+    "custom": {
+        "label": "自定义 OpenAI兼容", "type": "openai",
+        "base_url": "",
+        "models": [],
+    },
+}
+
+def provider_labels():
+    return [p["label"] for p in AI_PROVIDERS.values()]
+
+def provider_id_by_label(label):
+    for pid, p in AI_PROVIDERS.items():
+        if p["label"] == label:
+            return pid
+    return "deepseek"
+
+def provider_info(pid):
+    return AI_PROVIDERS.get(pid, AI_PROVIDERS["deepseek"])
+
+def _chat_endpoint(base_url):
+    b = (base_url or "").strip().rstrip("/")
+    if not b:
+        return None
+    if b.endswith("/chat/completions"):
+        return b
+    return b + "/chat/completions"
+
+def _post_json(url, payload, headers, timeout, retries=3):
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    hdrs = {"Content-Type": "application/json"}
+    hdrs.update(headers or {})
+    req = request.Request(url, data=body, headers=hdrs, method="POST")
+    for attempt in range(retries):
         try:
             with request.urlopen(req, timeout=timeout) as resp:
-                body = resp.read().decode("utf-8")
-                result = json.loads(body)
-                content = result["choices"][0]["message"]["content"]
-                return content, None
+                return json.loads(resp.read().decode("utf-8")), None
         except error.HTTPError as e:
-            if e.code == 401:
-                return None, "API Key 无效 (401)"
+            try:
+                text = e.read().decode("utf-8", "replace")
+            except Exception:
+                text = ""
+            if e.code in (401, 403):
+                return None, "API Key 无效或无权限 (" + str(e.code) + ")"
             elif e.code == 402:
                 return None, "余额不足 (402)"
+            elif e.code == 404:
+                return None, "接口或模型不存在 (404): " + text[:300]
             elif e.code == 429:
-                if attempt < 2:
+                if attempt < retries - 1:
                     time.sleep(2)
                     continue
                 return None, "请求过于频繁 (429)"
+            elif e.code >= 500:
+                if attempt < retries - 1:
+                    time.sleep(1)
+                    continue
+                return None, "服务端错误 " + str(e.code) + ": " + text[:300]
             else:
-                return None, "HTTP " + str(e.code) + ": " + e.read().decode()
+                return None, "HTTP " + str(e.code) + ": " + text[:300]
         except Exception as e:
-            if attempt < 2:
+            if attempt < retries - 1:
                 time.sleep(1)
                 continue
             return None, "请求失败: " + str(e)
     return None, "多次重试失败"
+
+def _openai_chat(api_key, system_prompt, user_prompt, model, base_url, timeout):
+    url = _chat_endpoint(base_url)
+    if not url:
+        return None, "Base URL 未填写"
+    headers = {"Authorization": "Bearer " + api_key} if api_key else {}
+    payload = {"model": model,
+               "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+               "temperature": 0.3, "stream": False}
+    data, err = _post_json(url, payload, headers, timeout)
+    if err:
+        return None, err
+    try:
+        msg = data["choices"][0]["message"]
+        content = msg.get("content")
+        if content is None:
+            content = msg.get("reasoning_content") or ""
+        return content, None
+    except Exception:
+        return None, "响应格式异常: " + json.dumps(data, ensure_ascii=False)[:300]
+
+def _anthropic_chat(api_key, system_prompt, user_prompt, model, base_url, timeout):
+    url = (base_url or "https://api.anthropic.com").strip().rstrip("/") + "/v1/messages"
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    payload = {"model": model, "max_tokens": 4096, "temperature": 0.3,
+               "system": system_prompt,
+               "messages": [{"role": "user", "content": user_prompt}]}
+    data, err = _post_json(url, payload, headers, timeout)
+    if err:
+        return None, err
+    try:
+        parts = data["content"]
+        text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+        if not text:
+            return None, "响应无文本内容: " + json.dumps(data, ensure_ascii=False)[:300]
+        return text, None
+    except Exception:
+        return None, "响应格式异常: " + json.dumps(data, ensure_ascii=False)[:300]
+
+def _gemini_chat(api_key, system_prompt, user_prompt, model, base_url, timeout):
+    base = (base_url or "https://generativelanguage.googleapis.com/v1beta").strip().rstrip("/")
+    url = base + "/models/" + model + ":generateContent"
+    headers = {"x-goog-api-key": api_key}
+    payload = {"systemInstruction": {"parts": [{"text": system_prompt}]},
+               "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+               "generationConfig": {"temperature": 0.3}}
+    data, err = _post_json(url, payload, headers, timeout)
+    if err:
+        return None, err
+    try:
+        cand = data.get("candidates") or []
+        if not cand:
+            return None, "无返回内容(可能被安全策略拦截): " + json.dumps(data.get("promptFeedback", {}), ensure_ascii=False)
+        parts = cand[0].get("content", {}).get("parts", [])
+        text = "".join(p.get("text", "") for p in parts)
+        if not text:
+            return None, "响应无文本内容: " + json.dumps(data, ensure_ascii=False)[:300]
+        return text, None
+    except Exception:
+        return None, "响应格式异常: " + json.dumps(data, ensure_ascii=False)[:300]
+
+def ai_chat(api_key, system_prompt, user_prompt, model="deepseek-flash",
+            provider="deepseek", base_url=None, timeout=60):
+    """统一 AI 调用入口。provider 取自 AI_PROVIDERS；base_url 为空则用该服务商默认地址。"""
+    info = provider_info(provider)
+    if base_url is not None and str(base_url).strip():
+        base = str(base_url).strip()
+    else:
+        base = info["base_url"]
+    if not model:
+        model = info["models"][0] if info["models"] else ""
+    if not model:
+        return None, "模型名未填写"
+    api_key = (api_key or "").strip()
+    if not api_key and not info.get("key_optional"):
+        return None, info["label"] + " API Key 未填写"
+    kind = info["type"]
+    if kind == "anthropic":
+        return _anthropic_chat(api_key, system_prompt, user_prompt, model, base, timeout)
+    if kind == "gemini":
+        return _gemini_chat(api_key, system_prompt, user_prompt, model, base, timeout)
+    return _openai_chat(api_key, system_prompt, user_prompt, model, base, timeout)
+
+def deepseek_chat(api_key, system_prompt, user_prompt, model="deepseek-flash", timeout=60):
+    return ai_chat(api_key, system_prompt, user_prompt, model=model,
+                   provider="deepseek", timeout=timeout)
 
 def extract_json(text):
     if not text:
@@ -724,13 +906,75 @@ def request_log_list(master, timeout=10):
         return []
 
 
-def download_log(master, log_id, on_progress=None, timeout=60, chunk_size=128):
+def _drain_log_data(master):
+    """丢弃接收队列中残留的 LOG_DATA 包(上一次请求的尾包)。"""
+    try:
+        for _ in range(500):
+            if master.recv_match(type='LOG_DATA', blocking=False) is None:
+                break
+    except Exception:
+        pass
+
+
+def _request_log_block(master, log_id, offset, length, deadline):
+    """
+    请求 [offset, offset+length) 这一段日志并收集其产生的所有 LOG_DATA 包。
+    LOG_DATA 单包最多 90 字节，一次请求会对应多个包，需按 ofs 组装。
+    容忍乱序、重复、以及窗口外的残留旧包；静默 3 秒自动重发剩余部分。
+    返回 bytes，超时返回 None。
+    """
+    sys_id = master.target_system
+    comp_id = master.target_component
+    end = offset + length
+    assembled = bytearray()
+    pending = {}  # ofs -> bytes
+    next_needed = offset
+    last_request = 0.0
+
+    def send_request():
+        nonlocal last_request
+        master.mav.log_request_data_send(sys_id, comp_id, log_id, next_needed, end - next_needed)
+        last_request = time.time()
+
+    send_request()
+    while next_needed < end:
+        if time.time() > deadline:
+            return None
+        msg = master.recv_match(type='LOG_DATA', blocking=True, timeout=1)
+        if msg is None:
+            if time.time() - last_request > 3:
+                send_request()  # 疑似丢包，从缺口处重发
+            continue
+        if msg.id != log_id:
+            continue
+        start = int(msg.ofs)
+        data = bytes(msg.data[:msg.count])
+        if start >= end or start + len(data) <= next_needed:
+            continue  # 窗口外残留包 / 已收到的重复包
+        if start < next_needed:  # 与已收部分重叠，裁掉前段
+            data = data[next_needed - start:]
+            start = next_needed
+        if start + len(data) > end:  # 裁掉超出本块窗口的部分
+            data = data[:end - start]
+        if start not in pending:
+            pending[start] = data
+        while next_needed in pending:  # 连续组装
+            block = pending.pop(next_needed)
+            assembled.extend(block)
+            next_needed += len(block)
+    return bytes(assembled)
+
+
+def download_log(master, log_id, on_progress=None, timeout=60, block_size=900):
     """
     Download a specific dataflash log by ID.
     Returns (log_data_bytes, error_message) tuple.
     on_progress callback: (current_bytes, total_bytes, log_id)
+    timeout: 至少秒数；实际总时限按日志大小与波特率估算后再取较大值。
     """
     try:
+        _drain_log_data(master)
+
         # First get log size from LOG_ENTRY (need to request it)
         master.mav.log_request_list_send(
             master.target_system, master.target_component,
@@ -748,33 +992,30 @@ def download_log(master, log_id, on_progress=None, timeout=60, chunk_size=128):
         
         if log_size is None:
             return None, "无法获取日志大小"
-        
-        # Download log data in chunks
+        if log_size == 0:
+            return None, "日志为空"
+
+        # 总超时：按 115200bps≈11KB/s 估算传输时间并留余量
+        est_seconds = log_size / 8000.0 + 30
+        deadline = time.time() + max(timeout, est_seconds)
+
+        # Download log data block by block
         log_data = bytearray()
-        total_chunks = (log_size + chunk_size - 1) // chunk_size
-        
-        for chunk_num in range(total_chunks):
-            offset = chunk_num * chunk_size
-            request_size = min(chunk_size, log_size - offset)
-            
-            master.mav.log_request_data_send(
-                master.target_system, master.target_component,
-                log_id, offset, request_size
-            )
-            
-            # Wait for LOG_DATA
-            msg = master.recv_match(type='LOG_DATA', blocking=True, timeout=5)
-            if msg is None:
-                return None, f"下载超时: chunk {chunk_num}"
-            
-            if msg.id != log_id or msg.ofs != offset:
-                return None, f"数据包不匹配: 期望 id={log_id} ofs={offset}, 收到 id={msg.id} ofs={msg.ofs}"
-            
-            log_data.extend(msg.data[:msg.count])
-            
+        offset = 0
+        while offset < log_size:
+            if time.time() > deadline:
+                return None, f"下载超时: 已获取 {len(log_data)}/{log_size} 字节 (offset={offset})"
+            req_len = min(block_size, log_size - offset)
+            block = _request_log_block(master, log_id, offset, req_len, deadline)
+            if block is None:
+                return None, f"下载超时: 已获取 {len(log_data)}/{log_size} 字节 (offset={offset})"
+            log_data.extend(block)
+            offset += len(block)
             if on_progress:
                 on_progress(len(log_data), log_size, log_id)
-        
+
+        if len(log_data) != log_size:
+            return None, f"数据不完整: 期望 {log_size} 字节, 实际 {len(log_data)} 字节"
         return bytes(log_data), None
     except Exception as e:
         return None, f"下载异常: {e}"
@@ -855,7 +1096,8 @@ def parse_log_with_mavlogdump(log_path, output_dir=None):
         return None, f"解析异常: {e}"
 
 
-def analyze_log_with_ai(log_csv_dir, api_key, model='deepseek-flash', timeout=120):
+def analyze_log_with_ai(log_csv_dir, api_key, model='deepseek-flash', timeout=120,
+                        provider='deepseek', base_url=None):
     """
     Send parsed log CSV files to AI for analysis.
     Returns AI analysis text or error.
@@ -902,4 +1144,5 @@ def analyze_log_with_ai(log_csv_dir, api_key, model='deepseek-flash', timeout=12
 
 请分析飞行状态，识别问题（振荡、振动、GPS/定位异常、磁偏、EKF 重置、电压/电流异常、姿态跟踪误差等），给出具体参数调整建议。"""
     
-    return deepseek_chat(api_key, system_prompt, user_prompt, timeout=timeout)
+    return ai_chat(api_key, system_prompt, user_prompt, model=model,
+                   provider=provider, base_url=base_url, timeout=timeout)

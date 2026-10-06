@@ -691,6 +691,13 @@ class AmpUI(object):
         self.worker_thread = None
         self.reader_running = False
         self.connected = False
+        # v1.30: 独立 EKF 监控线程 (检测 + 结论推给安全条)
+        self.ekf_mon_thread = None
+        self.ekf_mon_running = False
+        self.ekf_verdict = {'text': 'EKF: --', 'style': 'Gray.TLabel',
+                            'ready': False, 'why': '--'}
+        self._ekf_mon_state = None      # 上一轮判定 (变化才打日志)
+        self._ekf_mon_log_t = 0.0       # 判定日志节流
 
         self.cmd_stats = {'lock': threading.Lock(), 'counts': {},
                           'last': '--', 'last_t': 0.0,
@@ -712,6 +719,8 @@ class AmpUI(object):
             'volt': None, 'curt': None, 'remain': None, 'load': None,
             'rc': [None] * 8, 'rssi': None,
             'ekf': None, 'ekf_flags': None, 'status_text': '--', 'msgs': 0,
+            # v1.30: 最近一次收到 GPS/EKF 状态的时间 (监控线程判数据是否陈旧)
+            'ekf_t': 0.0, 'gps_t': 0.0,
             'link_ok': False,
         }
         self.alt_hist = collections.deque(maxlen=ALT_HISTORY)
@@ -976,6 +985,11 @@ class AmpUI(object):
         self.lbl_hb = ttk.Label(bar, textvariable=self.var_hb_st,
                                 style='Gray.TLabel')
         self.lbl_hb.pack(side='left', padx=8)
+        # v1.30: EKF 解锁判定 — 独立监控线程结论 (与解锁预检门禁同一判据)
+        self.var_ekf_st = tk.StringVar(value='EKF: --')
+        self.lbl_ekf_st = ttk.Label(bar, textvariable=self.var_ekf_st,
+                                    style='Gray.TLabel')
+        self.lbl_ekf_st.pack(side='left', padx=8)
         self.var_prot_st = tk.StringVar(value='')
         ttk.Label(bar, textvariable=self.var_prot_st,
                   style='Bad.TLabel').pack(side='left', padx=8)
@@ -1556,6 +1570,7 @@ class AmpUI(object):
             tct.reset_launch_params_flag()   # v1.24.5: 连接时重置写入标记
             # 保存成功连接的串口
             self._save_selected_port()
+            self._start_ekf_monitor()        # v1.30: EKF 解锁判定线程
         else:
             self.connected = False
             self.btn_conn.configure(state='normal')
@@ -1581,6 +1596,12 @@ class AmpUI(object):
         self._release_rc_override()
         self.reader_running = False
         self.connected = False
+        self._stop_ekf_monitor()             # v1.30: 停 EKF 监控线程
+        if getattr(self, 'lbl_ekf_st', None) is not None:
+            self.ekf_verdict = {'text': 'EKF: --', 'style': 'Gray.TLabel',
+                                'ready': False, 'why': '--'}
+            self.var_ekf_st.set('EKF: --')
+            self.lbl_ekf_st.configure(style='Gray.TLabel')
         raw = self.raw
         self.raw = None
         self.proxy = None
@@ -1738,6 +1759,7 @@ class AmpUI(object):
                 t['fix'] = msg.fix_type
                 t['sats'] = msg.satellites_visible
                 t['hdop'] = None if msg.eph == 65535 else msg.eph
+                t['gps_t'] = time.time()
                 # v1.21: 空中GPS失联提示(节流10s, 仅提示不动作, 惯导继续)
                 if (isinstance(msg.fix_type, int) and msg.fix_type < 3
                         and t.get('armed')
@@ -1799,6 +1821,7 @@ class AmpUI(object):
                     pass
                 # v1.29.3: 存 flags 供"位置估计就绪"判定/显示 (非阻塞)
                 t['ekf_flags'] = int(getattr(msg, 'flags', 0))
+                t['ekf_t'] = time.time()   # v1.30: 监控线程据其判数据陈旧
             elif mtype == 'STATUSTEXT':
                 text = msg.text
                 if isinstance(text, (bytes, bytearray)):
@@ -1859,9 +1882,13 @@ class AmpUI(object):
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill='both', expand=True)
         # v1.24: 位置估计未就绪时改警示文案, 不再谎报"检测一切正常"
-        headline = ('🚨 检测一切正常, 即将解锁电机!' if
-                    bool(getattr(tct, 'ARM_CONFIRM_ALL_READY', True)) else
-                    '⚠️ 位置估计未就绪, 解锁可能被拒!')
+        # v1.29.4: 事由含"改用"= 预检未就绪走 ALT_HOLD 降级, 标题说清降级意图
+        if bool(getattr(tct, 'ARM_CONFIRM_ALL_READY', True)):
+            headline = '🚨 检测一切正常, 即将解锁电机!'
+        elif '改用' in str(reason or ''):
+            headline = '⚠️ 位置估计未就绪 → 改用 ALT_HOLD 解锁!'
+        else:
+            headline = '⚠️ 位置估计未就绪, 解锁可能被拒!'
         ttk.Label(frm, text=headline,
                   font=('Microsoft YaHei', 14, 'bold'),
                   foreground='#b00020').pack(pady=(0, 10))
@@ -2824,6 +2851,99 @@ class AmpUI(object):
             return '⏳ 等待飞控数据', 'Gray.TLabel'
         # 等待中(上电收敛/搜星) 用黄色, 永不满足(如 EKF 失效)也用黄提示
         return '⏳ ' + why, 'Warn.TLabel'
+
+    # ---------------- EKF 解锁判定监控线程 (v1.30) ----------------
+
+    def _start_ekf_monitor(self):
+        """连接成功后启动独立 EKF 监控线程 (主线程调用).
+        与读线程分离: 只读共享遥测 + 只发请求, 不抢 recv_match"""
+        self.ekf_mon_running = False
+        old = self.ekf_mon_thread
+        if old is not None and old.is_alive() \
+                and old is not threading.current_thread():
+            old.join(timeout=1.5)
+        self._ekf_mon_state = None
+        self._ekf_mon_log_t = 0.0
+        self.ekf_verdict = {'text': 'EKF: ⏳ 检测中...', 'style': 'Gray.TLabel',
+                            'ready': False, 'why': '检测中'}
+        self.ekf_mon_running = True
+        self.ekf_mon_thread = threading.Thread(target=self._ekf_monitor_loop,
+                                               daemon=True)
+        self.ekf_mon_thread.start()
+        self._log_line('🔍 EKF 监控线程已启动 (判据与解锁预检门禁一致)')
+
+    def _stop_ekf_monitor(self):
+        """停监控线程 (断开/退出时调用)"""
+        self.ekf_mon_running = False
+        t = self.ekf_mon_thread
+        if t is not None and t.is_alive() \
+                and t is not threading.current_thread():
+            t.join(timeout=1.5)
+        self.ekf_mon_thread = None
+
+    def _ekf_monitor_loop(self):
+        """独立线程: 每秒判定位置估计是否就绪, 结论推给安全条, 状态变化打日志
+        (✅ EKF正常可GUIDED解锁 / ⏳ 未就绪原因).
+        数据源 = 读线程灌的共享遥测, 全程不调 recv_match (不与读线程/测试任务
+        抢消息); 仅当 EKF 状态报文陈旧(>6s)才主动 REQUEST 一次 (只发不收,
+        零竞争), 保证固件不流式发送时也有判据."""
+        me = threading.current_thread()
+        last_req = 0.0
+        while self.ekf_mon_running and self.ekf_mon_thread is me \
+                and self.connected:
+            now = time.time()
+            with self.tel_lock:
+                fix = self.tel.get('fix')
+                sats = self.tel.get('sats')
+                flags = self.tel.get('ekf_flags')
+                ekf_t = self.tel.get('ekf_t', 0.0)
+                hb_t = self.tel.get('hb_t', 0.0)
+            raw = self.raw
+            if raw is not None and now - ekf_t > 6.0 \
+                    and now - last_req >= 3.0:
+                last_req = now
+                try:
+                    raw.mav.command_long_send(
+                        raw.target_system, raw.target_component,
+                        mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
+                        mavutil.mavlink.MAVLINK_MSG_ID_EKF_STATUS_REPORT,
+                        0, 0, 0, 0, 0, 0)
+                except Exception:
+                    pass
+
+            if hb_t and now - hb_t > 5.0:
+                text, style, ready, why = (
+                    'EKF: ⚠️ 心跳丢失', 'Bad.TLabel', False, '心跳丢失')
+            elif fix is None and flags is None:
+                text, style, ready, why = (
+                    'EKF: ⏳ 等待飞控数据', 'Gray.TLabel', False, '等待数据')
+            else:
+                ready, why = tct.position_ready_state(fix, sats, flags)
+                if ready:
+                    text, style = 'EKF: ✅ 正常 可GUIDED解锁', 'Ok.TLabel'
+                else:
+                    text, style = 'EKF: ⏳ 未就绪: %s' % why, 'Warn.TLabel'
+            self.ekf_verdict = {'text': text, 'style': style,
+                                'ready': ready, 'why': why}
+            self._ekf_log_state(ready, why, flags)
+            time.sleep(1.0)
+
+    def _ekf_log_state(self, ready, why, flags):
+        """判定(就绪+原因)变化才打日志, 5s 节流防止每秒刷屏;
+        节流期间不更新状态, 下一轮仍未变则补打 (延迟不丢失)"""
+        key = (bool(ready), str(why))
+        now = time.time()
+        if key == self._ekf_mon_state:
+            return
+        if now - self._ekf_mon_log_t < 5.0:
+            return
+        self._ekf_mon_state = key
+        self._ekf_mon_log_t = now
+        if ready:
+            self._log_line('✅ EKF 正常, 可 GUIDED 解锁%s' % (
+                '' if flags is None else ' (flags=0x%04x)' % int(flags)))
+        else:
+            self._log_line('⏳ EKF 未就绪(%s), 暂不可 GUIDED 解锁' % why)
 
     def _check_safety(self, now):
         """围栏/低电/心跳监控 (GUI 线程, _tick 内调用)"""
@@ -4503,6 +4623,13 @@ class AmpUI(object):
         lbl_pr = getattr(self, 'lbl_posrdy', None)
         if lbl_pr is not None:
             lbl_pr.configure(style=pr_style)
+        # v1.30: EKF 监控线程结论 (线程只判定, 安全条由主线程统一渲染)
+        ev = self.ekf_verdict
+        if ev is not None and getattr(self, 'lbl_ekf_st', None) is not None:
+            if self.var_ekf_st.get() != ev['text']:
+                self.var_ekf_st.set(ev['text'])
+            if self.lbl_ekf_st.cget('style') != ev['style']:
+                self.lbl_ekf_st.configure(style=ev['style'])
         L['st'].set(t['status_text'][:28])
         L['rcov'].set('杆值覆盖中' if rc_ov else '未覆盖')
         if self.var_rc_mode is not None:
@@ -4670,6 +4797,7 @@ class AmpUI(object):
         self._release_rc_override()
         self.reader_running = False
         self.connected = False
+        self._stop_ekf_monitor()             # v1.30: 退出前停 EKF 监控线程
         raw = self.raw
         self.raw = None
         self.proxy = None

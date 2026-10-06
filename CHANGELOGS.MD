@@ -817,3 +817,56 @@ equest_log_list() / download_log() / download_logs() / erase_logs() - 标准 MAV
 - 后台看门狗线程: 已连接状态下主线程 `_tick` 停摆 >3s 时, 把所有线程堆栈
   转储到工作目录 `ui_hang_dump.txt`, 便于后续定位任何卡死点。
 - 验证: 人为阻塞主线程 6s, 看门狗成功转储含阻塞帧的堆栈。
+
+## v1.29.4 - 2026-10-05
+
+### Fixed - 预检门禁拦在 ARM 之前, 室内"起飞(按高度)/14低空起降"干等60s后失败
+
+- **现象(实机)**: 点 **起飞(按高度)** 或 **14 低空起降悬停**, 反复只打
+  `⏳ 等待位置估计就绪 (Ns/60s): EKF无有效位置(flags=0x00a7)`, 60s 后
+  `❌ 预检未通过(...) 本次不发送 ARM` 直接失败; **遥控器 STABILIZE 却能起飞**。
+- **不是姿态问题**: `flags=0x00a7` 解码 = `ATTITUDE|VELOCITY_HORIZ|VELOCITY_VERT|POS_VERT_ABS|CONST_POS_MODE`,
+  **缺 `POS_HORIZ_REL/ABS`** → 飞控 `PreArm: Need Position Estimate`(mandatory, 跳不掉)。
+  室内 GPS 多径(fix=3 但 EKF 不融合水平位置 → 恒定位模式); 遥控器手动模式不查位置估计, 故可飞。
+- **根因(代码 bug)**: v1.29.3 预检门禁 `wait_position_ready` 超时后**直接 `return False`**,
+  而 v1.24.3 的 **ALT_HOLD 降级分支要"ARM 命令被飞控拒绝"才触发** → 门禁永远先拦在 ARM 之前,
+  降级分支永不执行, 两条起飞路径只能失败。
+- **修复** (`apm_control_test.py::arm_vehicle`): 预检未通过改走与"ARM 被拒"**同一降级出口** —
+  `confirm_arm(all_ready=False)` 现场确认后 `arm_vehicle(fallback_mode='ALT_HOLD', gate=False)`;
+  `arm_and_takeoff` 按实际模式用**油门覆盖爬升**(气压定高, 无需GPS)替代 NAV_TAKEOFF(原有分派逻辑, 无需改动)。
+- **文案**: `position_ready_state` 恒定位时返回 `EKF无水平位置(恒定位,未融合GPS,flags=0x00a7)`;
+  GUI 确认框事由含"改用"时标题改为 `⚠️ 位置估计未就绪 → 改用 ALT_HOLD 解锁!`(不再含糊)。
+- **验证**: `py_compile` OK; `pyflakes` 基线 8 条无新增; 门禁三路径脚本
+  (确认→降级 ALT_HOLD / 取消→不解锁 / 就绪→继续 GUIDED) + `position_ready_state` 判据用例全绿。
+
+## v1.30.0 - 2026-10-05
+
+### Added - 独立 EKF 状态监控线程 + 安全条解锁判定 (apm_control_ui.py)
+
+- **需求**: 连接后随时可见"EKF 是否正常 / 能否 GUIDED 解锁", 而不是点起飞
+  才在日志里干等 60s 预检才知道结果。
+- **线程**: `AmpUI._ekf_monitor_loop` (1s 周期), `_after_connect` 启动,
+  断开/退出时 `_stop_ekf_monitor` 停止 (带线程身份校验, 防重连出双线程)。
+- **判据同源**: 直接调 `tct.position_ready_state(fix, sats, flags)` — 与
+  `arm_vehicle` 预检门禁完全一致, **界面结论 = 解锁行为**, 不会出现
+  "界面说行但解锁被拒"。
+- **不抢消息**: 线程只读读线程灌的共享遥测 (`tel_lock`), 全程不调
+  `recv_match`; 仅当 `EKF_STATUS_REPORT` 陈旧 >6s 才主动 `REQUEST_MESSAGE`
+  一次 (只发不收, 零竞争), 覆盖固件不流式发送该报文的情况。
+- **安全条新增 `EKF:` 标签**, 结论四态:
+  | 文案 | 样式 | 条件 |
+  |------|------|------|
+  | `✅ 正常 可GUIDED解锁` | Ok 绿 | 判据全绿 |
+  | `⏳ 未就绪: <原因>` | Warn 黄 | 如 `EKF无水平位置(恒定位,未融合GPS,flags=0x00a7)` |
+  | `⏳ 等待飞控数据` | Gray 灰 | 未收到 GPS/EKF 报文 |
+  | `⚠️ 心跳丢失` | Bad 红 | 心跳 >5s 未更新 |
+- **日志**: 判定(就绪+原因)变化才打一行, 5s 节流防刷屏 —
+  `✅ EKF 正常, 可 GUIDED 解锁 (flags=0x...)` / `⏳ EKF 未就绪(...), 暂不可 GUIDED 解锁`。
+- **数据新鲜度**: `_update_tel` 记录 `gps_t`/`ekf_t`, 监控线程据其判报文陈旧,
+  并区分"心跳丢失"与"EKF 未就绪"两种失败。
+- **渲染线程安全**: 线程只写 `self.ekf_verdict`, 由主线程 `_tick_body`
+  统一渲染到标签 (与遥测面板同一约定, 不从后台线程碰 Tk 变量)。
+- **验证**: `py_compile` OK; `pyflakes` 基线 8 条无新增; 监控线程 5 用例
+  (就绪 / 室内 0xA7 / 无数据 / 陈旧触发 REQUEST / 心跳丢失) +
+  真实 `AmpUI` 构造→启动线程→灌遥测→`_tick_body` 渲染→停线程 UI 冒烟全绿。
+- 说明: 仅 `apm_control_ui.py` (px4 侧无 `position_ready_state`, 未同步)。

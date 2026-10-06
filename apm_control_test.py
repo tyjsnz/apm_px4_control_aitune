@@ -423,7 +423,8 @@ def arm_vehicle(master, mode='GUIDED', timeout=10, retries=ARM_RETRY,
     心跳 ARMED; 被拒且原因为 GPS/EKF 未就绪时等就绪后自动重试 retries 次.
     v1.24.3: 始终无法就绪时经现场确认降级 fallback_mode(默认 ALT_HOLD —
     气压定高不依赖位置估计, 且可油门起飞, 比 STABILIZE 更安全; 起飞流程
-    会以油门爬升替代 NAV_TAKEOFF). 返回 True/False"""
+    会以油门爬升替代 NAV_TAKEOFF). v1.29.4: 该降级出口对"预检门禁超时"
+    与"ARM 被拒"两条路径统一生效. 返回 True/False"""
     mode = (mode or 'GUIDED').upper()
     mode_map = master.mode_mapping() or {}
     if mode not in mode_map:
@@ -437,7 +438,24 @@ def arm_vehicle(master, mode='GUIDED', timeout=10, retries=ARM_RETRY,
     if gate and mode in POSITION_MODES and not master.motors_armed():
         ready, why = wait_position_ready(master, timeout=ARM_PREPARE_WAIT)
         if not ready:
-            print(f"  ❌ 预检未通过({why}), 本次不发送 ARM")
+            print(f"  ❌ 预检未通过({why}), 本次不发送 ARM "
+                  f"({mode} 解锁必被 PreArm 拒绝)")
+            # v1.29.4: 门禁失败不再直接放弃 — 走与"ARM 被拒"相同的降级出口.
+            # 旧版在这一步 return False, 而 v1.24.3 的 ALT_HOLD 降级分支要
+            # "ARM 命令被飞控拒绝"才触发: 室内 GPS 多径 / EKF 恒定位时位置
+            # 估计永不到位, 门禁永远先拦在 ARM 之前 → 降级分支永不触发,
+            # 起飞(按高度)/测试14 只能干等 60s 后失败(实机反馈的问题).
+            if retries > 0 and mode != fallback_mode:
+                if not confirm_arm(
+                        f"位置估计未就绪({why}), {mode}解锁必被拒; "
+                        f"确认则改用 {fallback_mode} 解锁(气压定高, 无需GPS)",
+                        all_ready=False):
+                    print("  ⛔ 未确认, 取消解锁")
+                    return False
+                print(f"  ⏳ 经确认, 改用 {fallback_mode} 模式解锁...")
+                return arm_vehicle(master, mode=fallback_mode,
+                                   timeout=timeout, retries=retries - 1,
+                                   gate=False)
             print("    提示: 室外等 GPS 3D 定位 + EKF 收敛(约 20~60s)再解锁;")
             print("          急用请点 [定高解锁] 走 ALT_HOLD(不依赖位置估计)")
             return False
@@ -825,7 +843,12 @@ def position_ready_state(fix, sats, flags, min_sats=AUTOTUNE_MIN_SATS,
             return False, '未收到EKF状态'
         return True, '就绪(仅GPS)'
     if not ekf_pos_ready(int(flags)):
-        return False, 'EKF无有效位置(flags=0x%04x)' % int(flags)
+        f = int(flags)
+        # 室内实测 0x00A7: 有姿态/速度/垂直位置 + CONST_POS_MODE, 无水平位置
+        # — 旧文案只说"无有效位置"易被误读成姿态问题, 这里点明真正缺项
+        if (f & EKF_CONST_POS_FLAG) and not (f & EKF_POS_HORIZ_FLAGS):
+            return False, 'EKF无水平位置(恒定位,未融合GPS,flags=0x%04x)' % f
+        return False, 'EKF无有效位置(flags=0x%04x)' % f
     return True, '就绪'
 
 

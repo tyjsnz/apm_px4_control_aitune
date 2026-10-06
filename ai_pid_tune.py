@@ -8,6 +8,10 @@ _BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(_BASE, 'ai_tune_config.json')
 BACKUP_DIR = os.path.join(_BASE, 'ai_tune_backups')
 
+def _is_checked(value):
+    """Treeview 的值读回来是字符串，'False' 也是非空字符串，必须显式判断。"""
+    return str(value).strip().lower() in ('✓', 'true', '1', 'y', 'yes')
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -46,12 +50,17 @@ class App(tk.Tk):
                     return json.load(f)
         except Exception:
             pass
-        return {'api_key': '', 'model': 'deepseek-flash', 'last_port': '', 'baud': 115200, 'last_spec': {}}
+        return {'provider': 'deepseek', 'api_key': '', 'model': 'deepseek-flash', 'base_url': '',
+                'providers': {}, 'last_port': '', 'baud': 115200, 'last_spec': {}}
 
     def save_config(self):
+        self.store_provider_state()
         cfg = {
+            'provider': provider_id_by_label(self.provider_var.get()),
             'api_key': self.api_key_var.get(),
             'model': self.model_var.get(),
+            'base_url': self.base_url_var.get(),
+            'providers': getattr(self, 'provider_state', {}),
             'last_port': self.port_var.get(),
             'baud': int(self.baud_var.get()),
             'last_spec': self.get_spec_dict()
@@ -108,6 +117,56 @@ class App(tk.Tk):
         self.battery_c_rating_var.set(d.get('battery_c_rating', ''))
         self.notes_text.delete('1.0', 'end')
         self.notes_text.insert('1.0', d.get('notes', ''))
+
+    def store_provider_state(self):
+        pid = provider_id_by_label(self.provider_var.get())
+        self._cur_provider = pid
+        self.provider_state[pid] = {
+            'key': self.api_key_var.get().strip(),
+            'model': self.model_var.get().strip(),
+            'base_url': self.base_url_var.get().strip()
+        }
+
+    def on_provider_change(self, event=None):
+        old = getattr(self, '_cur_provider', None)
+        if old and hasattr(self, 'api_key_var'):
+            self.provider_state[old] = {
+                'key': self.api_key_var.get().strip(),
+                'model': self.model_var.get().strip(),
+                'base_url': self.base_url_var.get().strip()
+            }
+        pid = provider_id_by_label(self.provider_var.get())
+        self._cur_provider = pid
+        info = provider_info(pid)
+        st = self.provider_state.get(pid, {})
+        self.api_key_var.set(st.get('key', ''))
+        self.base_url_var.set(st.get('base_url') or info['base_url'])
+        self.model_var.set(st.get('model') or (info['models'][0] if info['models'] else ''))
+        self.model_cb['values'] = info['models']
+        self.api_key_label.configure(text=info['label'] + ' API Key:')
+        self.log(f'已切换 AI 服务商: {info["label"]}')
+
+    def get_ai_settings(self):
+        """返回 (provider_id, api_key, base_url, model)，在主线程调用后传入工作线程。"""
+        pid = provider_id_by_label(self.provider_var.get())
+        info = provider_info(pid)
+        return (pid, self.api_key_var.get().strip(),
+                self.base_url_var.get().strip() or info['base_url'],
+                self.model_var.get().strip())
+
+    def check_ai_settings(self):
+        pid, key, base_url, model = self.get_ai_settings()
+        info = provider_info(pid)
+        if not key and not info.get('key_optional'):
+            messagebox.showwarning('提示', f'请先填写 {info["label"]} API Key')
+            return None
+        if not base_url:
+            messagebox.showwarning('提示', '请先填写 Base URL')
+            return None
+        if not model:
+            messagebox.showwarning('提示', '请先选择或输入模型名')
+            return None
+        return (pid, key, base_url, model)
 
     def build_ui(self):
         # Top bar
@@ -273,18 +332,57 @@ class App(tk.Tk):
         ttk.Separator(left, orient='horizontal').grid(row=row, column=0, columnspan=2, sticky='ew', pady=5)
         row += 1
         
-        # API Key
-        ttk.Label(left, text='DeepSeek API Key:').grid(row=row, column=0, sticky='w', pady=2)
-        self.api_key_var = tk.StringVar(value=self.config.get('api_key', ''))
+        # AI Provider / API Key
+        if 'providers' in self.config:
+            self.provider_state = self.config.get('providers') or {}
+        else:
+            # 旧配置只有单个 DeepSeek api_key/model
+            self.provider_state = {}
+            if self.config.get('api_key'):
+                self.provider_state['deepseek'] = {
+                    'key': self.config.get('api_key', ''),
+                    'model': self.config.get('model', ''),
+                    'base_url': self.config.get('base_url', '')
+                }
+        prov_pid = self.config.get('provider', 'deepseek')
+        if prov_pid not in AI_PROVIDERS:
+            prov_pid = 'deepseek'
+        self._cur_provider = prov_pid
+        prov = provider_info(prov_pid)
+        prov_state = self.provider_state.get(prov_pid, {})
+
+        ttk.Label(left, text='AI 服务商:').grid(row=row, column=0, sticky='w', pady=2)
+        self.provider_var = tk.StringVar(value=prov['label'])
+        self.provider_cb = ttk.Combobox(left, textvariable=self.provider_var, values=provider_labels(),
+                                        width=22, state='readonly')
+        self.provider_cb.grid(row=row, column=1, sticky='ew', pady=2)
+        self.provider_cb.bind('<<ComboboxSelected>>', self.on_provider_change)
+        row += 1
+
+        self.api_key_label = ttk.Label(left, text=prov['label'] + ' API Key:')
+        self.api_key_label.grid(row=row, column=0, sticky='w', pady=2)
+        self.api_key_var = tk.StringVar(value=prov_state.get('key', ''))
         self.api_key_entry = ttk.Entry(left, textvariable=self.api_key_var, width=22, show='*')
         self.api_key_entry.grid(row=row, column=1, sticky='ew', pady=2)
         row += 1
-        
-        ttk.Label(left, text='模型:').grid(row=row, column=0, sticky='w', pady=2)
-        self.model_var = tk.StringVar(value=self.config.get('model', 'deepseek-flash'))
-        ttk.Combobox(left, textvariable=self.model_var, values=['deepseek-flash', 'deepseek-v4-pro'], width=20).grid(row=row, column=1, sticky='ew', pady=2)
+
+        self.base_url_label = ttk.Label(left, text='Base URL:')
+        self.base_url_label.grid(row=row, column=0, sticky='w', pady=2)
+        self.base_url_var = tk.StringVar(value=prov_state.get('base_url') or prov['base_url'])
+        self.base_url_entry = ttk.Entry(left, textvariable=self.base_url_var, width=22)
+        self.base_url_entry.grid(row=row, column=1, sticky='ew', pady=2)
+        ToolTip(self.base_url_label, '接口地址(不含 /chat/completions)。\n留空使用该服务商默认地址。\n可用于中转站、代理或本地 Ollama(如 http://localhost:11434/v1)。')
+        ToolTip(self.base_url_entry, '接口地址(不含 /chat/completions)。\n留空使用该服务商默认地址。\n可用于中转站、代理或本地 Ollama(如 http://localhost:11434/v1)。')
         row += 1
-        
+
+        self.model_label = ttk.Label(left, text='模型:')
+        self.model_label.grid(row=row, column=0, sticky='w', pady=2)
+        self.model_var = tk.StringVar(value=prov_state.get('model') or (prov['models'][0] if prov['models'] else ''))
+        self.model_cb = ttk.Combobox(left, textvariable=self.model_var, values=prov['models'], width=22)
+        self.model_cb.grid(row=row, column=1, sticky='ew', pady=2)
+        ToolTip(self.model_cb, '下拉选择常用模型，也可直接输入该平台的任意模型名。')
+        row += 1
+
         ttk.Button(left, text='保存配置', command=self.save_config).grid(row=row, column=0, columnspan=2, sticky='ew', pady=5)
         row += 1
         
@@ -342,11 +440,12 @@ class App(tk.Tk):
         # Treeview
         cols = ('name', 'current', 'ai', 'delta', 'check', 'desc')
         self.ai_tree = ttk.Treeview(f, columns=cols, show='headings', height=18)
-        for c, w, t in (('name', 150, '参数名'), ('current', 80, '当前值'), ('ai', 80, 'AI建议'), ('delta', 70, '变化%'), ('check', 50, '勾选'), ('desc', 250, '中文说明')):
+        for c, w, t in (('name', 150, '参数名'), ('current', 80, '当前值'), ('ai', 80, 'AI建议'), ('delta', 70, '变化%'), ('check', 50, '勾选(点击)'), ('desc', 250, '中文说明')):
             self.ai_tree.heading(c, text=t)
             self.ai_tree.column(c, width=w, anchor='center' if c not in ('name', 'desc') else 'w')
         self.ai_tree.pack(fill='both', expand=True, pady=5)
         self.ai_tree.tag_configure('changed', background='#3a3a2a')
+        self.ai_tree.bind('<Button-1>', lambda e: self.on_check_click(self.ai_tree, e, 5))
         
         # AI output
         ttk.Label(f, text='AI 分析:').pack(anchor='w')
@@ -466,10 +565,11 @@ class App(tk.Tk):
         # Log list
         cols = ('id', 'size', 'time_utc', 'select')
         self.logs_tree = ttk.Treeview(f, columns=cols, show='headings', height=18)
-        for c, w, t in (('id', 80, '日志ID'), ('size', 100, '大小'), ('time_utc', 180, '时间(UTC)'), ('select', 60, '选择')):
+        for c, w, t in (('id', 80, '日志ID'), ('size', 100, '大小'), ('time_utc', 180, '时间(UTC)'), ('select', 60, '选择(点击)')):
             self.logs_tree.heading(c, text=t)
             self.logs_tree.column(c, width=w, anchor='center')
         self.logs_tree.pack(fill='both', expand=True, pady=5)
+        self.logs_tree.bind('<Button-1>', lambda e: self.on_check_click(self.logs_tree, e, 4))
         
         # Download options
         df = ttk.LabelFrame(f, text='下载选项', padding=5)
@@ -701,7 +801,7 @@ class App(tk.Tk):
         for name, val in params.items():
             desc = param_set.get(name, {}).get('desc', '')
             self.param_tree.insert('', 'end', values=(name, f'{val:.4f}', desc))
-            self.ai_tree.insert('', 'end', values=(name, f'{val:.4f}', '', '', False, desc))
+            self.ai_tree.insert('', 'end', values=(name, f'{val:.4f}', '', '', '', desc))
         self.log(f'✅ 已读取 {len(params)} 个参数')
 
     def on_read_all_params(self):
@@ -711,17 +811,16 @@ class App(tk.Tk):
         if not self.connected:
             messagebox.showwarning('提示', '请先连接飞控')
             return
-        api_key = self.api_key_var.get().strip()
-        if not api_key:
-            messagebox.showwarning('提示', '请先填写 DeepSeek API Key')
+        settings = self.check_ai_settings()
+        if not settings:
             return
         if not self.param_names:
             messagebox.showwarning('提示', '请先读取当前参数')
             return
         self.log('正在生成 AI 调参建议...')
-        self.enqueue('AI生成', lambda: self._do_ai_generate(api_key))
+        self.enqueue('AI生成', lambda: self._do_ai_generate(settings))
 
-    def _do_ai_generate(self, api_key):
+    def _do_ai_generate(self, settings):
         # Build current params dict
         current = {}
         for item in self.ai_tree.get_children():
@@ -734,7 +833,10 @@ class App(tk.Tk):
         feedback = self.feedback_text.get('1.0', 'end-1c').strip()
         
         prompt = build_prompt(spec, current, self.fc_type, selected_groups, feedback, self.history)
-        content, err = deepseek_chat(api_key, SYSTEM_PROMPT, prompt, self.model_var.get())
+        pid, api_key, base_url, model = settings
+        self.log(f'调用 {provider_info(pid)["label"]} / {model} ...')
+        content, err = ai_chat(api_key, SYSTEM_PROMPT, prompt, model=model,
+                               provider=pid, base_url=base_url)
         
         if err:
             self.after(0, lambda: self.log(f'❌ AI 调用失败: {err}'))
@@ -764,12 +866,12 @@ class App(tk.Tk):
                 delta = ((new - cur) / cur * 100) if cur != 0 else 0
                 vals[2] = f'{new:.4f}'
                 vals[3] = f'{delta:+.1f}%'
-                vals[4] = True
+                vals[4] = '✓'
                 self.ai_tree.item(item, values=vals, tags=('changed',))
             else:
                 vals[2] = ''
                 vals[3] = ''
-                vals[4] = False
+                vals[4] = ''
                 self.ai_tree.item(item, values=vals, tags=())
         for w in warnings:
             self.log(f'⚠️ {w}')
@@ -788,7 +890,7 @@ class App(tk.Tk):
         checked = []
         for item in self.ai_tree.get_children():
             vals = self.ai_tree.item(item)['values']
-            if vals and vals[4] and vals[2]:
+            if vals and _is_checked(vals[4]) and vals[2]:
                 try:
                     checked.append((vals[0], float(vals[2])))
                 except (ValueError, TypeError):
@@ -846,41 +948,11 @@ class App(tk.Tk):
         if self.round == 0:
             messagebox.showinfo('提示', '首轮请先点击"AI 生成建议"并应用')
             return
-        api_key = self.api_key_var.get().strip()
-        if not api_key:
-            messagebox.showwarning('提示', '请先填写 DeepSeek API Key')
+        settings = self.check_ai_settings()
+        if not settings:
             return
         self.log('开始下一轮 AI 迭代...')
-        self.enqueue('AI迭代', lambda: self._do_next_iteration(api_key))
-
-    def _do_next_iteration(self, api_key):
-        current = {}
-        for item in self.ai_tree.get_children():
-            vals = self.ai_tree.item(item)['values']
-            if vals:
-                current[vals[0]] = float(vals[1])
-        spec = self.get_spec_dict()
-        selected_groups = [g for g, v in self.group_vars.items() if v.get()]
-        feedback = self.feedback_text.get('1.0', 'end-1c').strip()
-        
-        prompt = build_prompt(spec, current, self.fc_type, selected_groups, feedback, self.history)
-        content, err = deepseek_chat(api_key, SYSTEM_PROMPT, prompt, self.model_var.get())
-        
-        if err:
-            self.after(0, lambda: self.log(f'❌ AI 调用失败: {err}'))
-            return
-        parsed = extract_json(content)
-        if not parsed:
-            self.after(0, lambda: self.log('❌ AI 返回格式错误'))
-            self.after(0, lambda: self.ai_text.delete('1.0', 'end'))
-            self.after(0, lambda: self.ai_text.insert('1.0', content))
-            return
-        
-        ai_params = parsed.get('params', {})
-        valid_params, warnings = validate_ai_params(ai_params, self.fc_type, selected_groups)
-        
-        self.after(0, lambda: self._update_ai_tree(valid_params, warnings))
-        self.after(0, lambda: self._show_ai_result(parsed))
+        self.enqueue('AI迭代', lambda: self._do_next_iteration(settings))
 
     # ===== Backup =====
     def refresh_backups(self):
@@ -927,12 +999,25 @@ class App(tk.Tk):
         logs = request_log_list(self.mav_master)
         self.after(0, lambda: self._show_logs(logs))
 
+    def on_check_click(self, tree, event, col_index):
+        """点击指定列时切换 ✓ 勾选状态（col_index 从 1 开始）。"""
+        row = tree.identify_row(event.y)
+        if not row:
+            return
+        if tree.identify_column(event.x) != f'#{col_index}':
+            return
+        vals = tree.item(row)['values']
+        if not vals or len(vals) < col_index:
+            return
+        col_name = tree['columns'][col_index - 1]
+        tree.set(row, col_name, '' if _is_checked(vals[col_index - 1]) else '✓')
+
     def _show_logs(self, logs):
         self.logs_tree.delete(*self.logs_tree.get_children())
         for log in logs:
             t = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(log['time_utc'])) if log['time_utc'] else 'Unknown'
             size_str = f"{log['size']/1024:.1f} KB" if log['size'] < 1024*1024 else f"{log['size']/1024/1024:.1f} MB"
-            self.logs_tree.insert('', 'end', values=(log['id'], size_str, t, False), tags=(str(log['id']),))
+            self.logs_tree.insert('', 'end', values=(log['id'], size_str, t, ''), tags=(str(log['id']),))
         self.logs_status.configure(text=f'共 {len(logs)} 个日志', foreground='green')
         self.log(f'✅ 获取到 {len(logs)} 个飞行日志')
 
@@ -946,17 +1031,29 @@ class App(tk.Tk):
         if not self.connected:
             messagebox.showwarning('提示', '请先连接飞控')
             return
-        selected = []
+        checked = []
+        highlighted = []
         for item in self.logs_tree.get_children():
             vals = self.logs_tree.item(item)['values']
-            if vals and vals[3]:
-                selected.append(int(vals[0]))
+            if not vals:
+                continue
+            try:
+                log_id = int(vals[0])
+            except (ValueError, TypeError):
+                continue
+            if _is_checked(vals[3]):
+                checked.append(log_id)
+            elif item in self.logs_tree.selection():
+                highlighted.append(log_id)
+        selected = checked or highlighted
         if not selected:
-            messagebox.showinfo('提示', '请先在列表中勾选要下载的日志')
+            messagebox.showinfo('提示', '请先勾选要下载的日志\n(点击行首"选择"列打 ✓，或点击选中行)')
             return
+        if not checked and highlighted:
+            self.log(f'按高亮选中的 {len(highlighted)} 个日志下载（未勾选"选择"列）')
         if not messagebox.askyesno('确认', f'将下载 {len(selected)} 个日志文件，可能需要较长时间。\n继续？'):
             return
-        self.log(f'开始下载 {len(selected)} 个日志...')
+        self.log(f'开始下载 {len(selected)} 个日志: {selected}')
         self.log_progress['maximum'] = len(selected)
         self.log_progress['value'] = 0
         self.enqueue('下载日志', lambda: self._do_download_logs(selected))
@@ -1012,11 +1109,17 @@ class App(tk.Tk):
                 break
 
     def _do_ai_log_analysis(self, csv_dir, bin_path):
-        api_key = self.api_key_var.get().strip()
-        if not api_key:
+        pid, api_key, base_url, model = self.get_ai_settings()
+        info = provider_info(pid)
+        if not api_key and not info.get('key_optional'):
             self.log('❌ 未填写 API Key，跳过 AI 分析')
             return
-        analysis, err = analyze_log_with_ai(csv_dir, api_key, self.model_var.get())
+        if not model:
+            self.log('❌ 未选择模型，跳过 AI 分析')
+            return
+        self.log(f'调用 {info["label"]} / {model} 分析日志...')
+        analysis, err = analyze_log_with_ai(csv_dir, api_key, model,
+                                            provider=pid, base_url=base_url)
         if err:
             self.after(0, lambda: self.log(f'❌ AI 分析失败: {err}'))
             return
@@ -1140,7 +1243,8 @@ class App(tk.Tk):
         else:
             self.log(f'❌ {msg}')
 
-    def _do_next_iteration(self, api_key):
+    def _do_next_iteration(self, settings):
+        pid, api_key, base_url, model = settings
         current = {}
         for item in self.ai_tree.get_children():
             vals = self.ai_tree.item(item)['values']
@@ -1168,7 +1272,9 @@ class App(tk.Tk):
                     feedback += "\n[飞行指标] " + "; ".join(fb)
         
         prompt = build_prompt(spec, current, self.fc_type, selected_groups, feedback, self.history)
-        content, err = deepseek_chat(api_key, SYSTEM_PROMPT, prompt, self.model_var.get())
+        self.log(f'调用 {provider_info(pid)["label"]} / {model} ...')
+        content, err = ai_chat(api_key, SYSTEM_PROMPT, prompt, model=model,
+                               provider=pid, base_url=base_url)
         
         if err:
             self.after(0, lambda: self.log(f'❌ AI 调用失败: {err}'))
