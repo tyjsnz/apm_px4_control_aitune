@@ -2,6 +2,31 @@
 
 APM/ArduPilot MAVLink 控制脚本开发日志。
 
+## v1.11 - 2026-10-06
+
+### 移除 — 雷达目标接入
+- 删除 TCP `9100` NDJSON 订阅与「雷达填充 / 一键填入 GUIDED 目的地」入口（`apm_control_ui.py`），README 同步去掉「雷达目标接口」章节。
+- 本条取代 v1.x 中页二「航点任务(AUTO)」的「雷达填充」描述。
+
+### 修复 — 对照 ArduPilot 源码的飞控能力评审（P0/P1）
+
+| 问题 | 原实现 | 现实现 |
+|------|--------|--------|
+| 强制上锁无效 | `FORCE_DISARM=21196` 放 `param1`（固件只认 `param1==1`/`0`，21196 必须在 `param2`，否则 `MAV_RESULT_UNSUPPORTED`） | `param1=0, param2=21196`；`apm_control_test.py`/`px4_control.py` 同步 |
+| 切模式重复发且无确认 | `set_mode_apm()` 发两遍、不校验结果 | `mode_mapping()` 取权威 mode id 只发一次，心跳确认并过滤非本机源系统 |
+| 任务首航点被静默吞掉 | 上传 `count=N`，而 ArduPilot `seq0` 专供 home（`replace_cmd(0)` 为 no-op） | 上传 `count=N+1`、`seq0` 复用首项；用 ArduPilot 上传状态机仿真验证 fresh/home-only/已有旧任务 3 场景全部落盘 |
+| 重复执行任务起点错位 | 直接切 AUTO，沿用上次残留任务指针 | 新增 `reset_mission_to_start()`：`MAV_CMD_DO_SET_MISSION_CURRENT(param1=0)` 取 ACK，失败回退 `MISSION_SET_CURRENT(0)` 以 `MISSION_CURRENT(0)` 回显确认；进 AUTO 前调用 |
+| 任务进度/完成判定早一项 | `MISSION_CURRENT` 的 seq 含 home，进度用 `seq+1`、完成用 `n_wp-1` | 进度 `min(seq, n_wp)`、`none` 结束用 `last_seq >= n_wp` |
+| 速度指令 type_mask 不标准 | `3523`(缺 `Z_IGNORE`) / `4039`(带 `FORCE`) | 统一 `3527`：只用 vx/vy/vz，位置/加速度/偏航全忽略 |
+| HDOP 显示大 100 倍 | `GPS_RAW_INT.eph` 直接显示（规范 `×100`） | `eph * 0.01`，界面与状态输出一致 |
+| 非 GUIDED 下发速度被丢弃 | 静默丢弃 | 提示当前模式与生效条件（不自动切模式，避免干扰接管） |
+
+### Added — AUTO 超时按任务规模估算
+`执行(解锁+起飞→AUTO)` 超时 = `120 + 30×航点数 + 航线距离(米)`，并打印超时预算，长任务不再被固定 600s 截断。
+
+> 待实机/SITL 验证：强制上锁参数位、重复执行任务起点、连跑两次任务。
+
+
 ## v1.10 - 2026-09-24
 
 ### 新增 — `amp_control_ui.py` 图形测试界面

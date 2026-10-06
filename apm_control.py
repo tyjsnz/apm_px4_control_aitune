@@ -128,20 +128,25 @@ def wait_gps_lock(master, min_sats=6, timeout=30):
 
 
 def set_mode(master, mode_name):
-    """切换飞行模式并等待生效"""
+    """切换飞行模式并等待心跳确认生效"""
     mode_name = mode_name.upper()
-    mode_id = COPTER_MODE.get(mode_name)
+    mode_map = None
+    if hasattr(master, 'mode_mapping'):
+        try:
+            mode_map = master.mode_mapping()
+        except Exception:
+            mode_map = None
+    mode_id = (mode_map or {}).get(mode_name, COPTER_MODE.get(mode_name))
     if mode_id is None:
         sys.exit('错误: 未知飞行模式 %s' % mode_name)
 
     sent = False
-    if hasattr(master, 'set_mode_apm'):
+    if mode_map and mode_name in mode_map and hasattr(master, 'set_mode_apm'):
         try:
-            r = master.set_mode_apm(mode_name)
-            if r is not None:
-                sent = True
+            master.set_mode_apm(mode_name)
+            sent = True
         except Exception:
-            pass
+            sent = False
     if not sent:
         # 兜底: 使用 DO_SET_MODE 命令切换
         master.mav.command_long_send(
@@ -153,7 +158,11 @@ def set_mode(master, mode_name):
     deadline = time.time() + 10.0
     while time.time() < deadline:
         hb = master.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
-        if hb is not None and hb.custom_mode == mode_id:
+        if hb is None:
+            continue
+        if master.target_system and hb.get_srcSystem() != master.target_system:
+            continue
+        if hb.custom_mode == mode_id:
             print('[OK] 飞行模式: %s' % mode_name)
             return
     sys.exit('错误: 切换到 %s 模式失败(未解锁或飞控配置不支持)' % mode_name)
@@ -357,7 +366,7 @@ def set_velocity(master, vx, vy, vz=0.0):
         master.target_system,
         master.target_component,
         mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        0b111111000111,  # type_mask: 忽略位置/加速度/偏航, 只使用 vx/vy/vz
+        0b110111000111,  # type_mask: 忽略位置/加速度/偏航, 只使用 vx/vy/vz
         0, 0, 0,          # lat/lon/alt(忽略, 填0)
         vx, vy, vz,       # 北东地速度分量
         0, 0, 0,          # afx, afy, afz
@@ -429,7 +438,10 @@ def upload_mission(master, wps, end_action='rtl', timeout=30.0):
     """通过 MAVLink 任务协议上传航点任务到飞控.
     wps: [(lat, lon, alt), ...] 与 ('DROP', 通道, 触发PWM, 回位PWM, 保持ms) 混合;
     DROP 展开为 DO_SET_SERVO(触发) [+NAV_DELAY 保持] + DO_SET_SERVO(回位).
-    end_action: rtl/land/none 追加的结束指令. 成功返回任务项数, 失败 False"""
+    end_action: rtl/land/none 追加的结束指令. 成功返回任务项数, 失败 False.
+    ArduPilot 的 seq0 专供 home(mavlink.io: ArduPilot's first mission seq is
+    the home position), 因此线上多发一项 count+1, seq0 复用首项; 少发则
+    首个航点被 home 槽静默吞掉. 返回值仍是真实任务项数(不含 home)."""
     items = []
     n_wp = 0
     n_drop = 0
@@ -510,11 +522,12 @@ def upload_mission(master, wps, end_action='rtl', timeout=30.0):
         })
 
     count = len(items)
+    wire_count = count + 1
     print('开始上传任务: %d 航点, %d 抛投, 结束动作 %s ...' % (
         n_wp, n_drop, end_action.upper()))
 
     def _send_item(seq):
-        it = items[seq]
+        it = items[0] if seq == 0 else items[min(seq - 1, count - 1)]
         master.mav.mission_item_int_send(
             master.target_system, master.target_component,
             seq, it['frame'], it['command'], it['current'], 1,
@@ -522,7 +535,7 @@ def upload_mission(master, wps, end_action='rtl', timeout=30.0):
             it['x'], it['y'], it['z'])
 
     master.mav.mission_count_send(
-        master.target_system, master.target_component, count)
+        master.target_system, master.target_component, wire_count)
 
     t_end = time.time() + timeout
     while time.time() < t_end:
@@ -534,9 +547,9 @@ def upload_mission(master, wps, end_action='rtl', timeout=30.0):
         mtype = msg.get_type()
         if mtype in ('MISSION_REQUEST_INT', 'MISSION_REQUEST'):
             seq = msg.seq
-            if 0 <= seq < count:
+            if 0 <= seq < wire_count:
                 _send_item(seq)
-                print('  发送任务项 %d/%d' % (seq + 1, count))
+                print('  发送任务项 %d/%d' % (seq, wire_count))
         elif mtype == 'MISSION_ACK':
             ack = msg.type
             if ack == mavutil.mavlink.MAV_MISSION_ACCEPTED:
@@ -548,6 +561,47 @@ def upload_mission(master, wps, end_action='rtl', timeout=30.0):
                    if int(ack) == 9 else ''))
             return False
     print('错误: 任务上传超时')
+    return False
+
+
+def reset_mission_to_start(master, timeout=2.0):
+    """把任务指针复位到第 1 项(进 AUTO 前调用).
+    先发 MAV_CMD_DO_SET_MISSION_CURRENT(param1=0, param2=0)取 COMMAND_ACK;
+    被拒/无 ACK 再回退 MISSION_SET_CURRENT(0) 消息 — ArduPilot 只在
+    set_current_cmd 成功时才回显 MISSION_CURRENT(seq=0), 故回显即确认.
+    best-effort: 两条都不确认只告警, 仍按当前指针继续执行. 返回 True/False"""
+    master.mav.command_long_send(
+        master.target_system, master.target_component,
+        mavutil.mavlink.MAV_CMD_DO_SET_MISSION_CURRENT, 0,
+        0, 0, 0, 0, 0, 0, 0)
+    t_end = time.time() + timeout
+    while time.time() < t_end:
+        msg = master.recv_match(type='COMMAND_ACK', blocking=True,
+                                timeout=max(0.2, t_end - time.time()))
+        if msg is None:
+            break
+        if msg.command != mavutil.mavlink.MAV_CMD_DO_SET_MISSION_CURRENT:
+            continue
+        if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+            print('[OK] 任务指针已复位到第 1 项')
+            return True
+        break
+    print('  ⏳ 改用 MISSION_SET_CURRENT(0) 复位任务指针...')
+    master.mav.mission_set_current_send(
+        master.target_system, master.target_component, 0)
+    t_end = time.time() + 1.5
+    while time.time() < t_end:
+        msg = master.recv_match(type='MISSION_CURRENT', blocking=True,
+                                timeout=max(0.2, t_end - time.time()))
+        if msg is None:
+            break
+        if master.target_system and msg.get_srcSystem() != master.target_system:
+            continue
+        if msg.seq == 0:
+            print('[OK] 任务指针已复位到第 1 项')
+            return True
+        break
+    print('  ⚠️ 任务指针复位未确认(固件较旧?), 按当前指针执行')
     return False
 
 
@@ -570,11 +624,13 @@ def wait_auto_mission(master, n_wp, end_action, timeout=600.0):
             last_seq = msg.seq
             now = time.time()
             if now - last_report >= 5.0:
-                shown = min(last_seq + 1, n_wp)
+                shown = min(last_seq, n_wp)
                 print('  任务进度: 航点 %d/%d (seq=%d)' % (
                     shown, n_wp, last_seq))
                 last_report = now
         elif mtype == 'HEARTBEAT':
+            if master.target_system and msg.get_srcSystem() != master.target_system:
+                continue
             cm = msg.custom_mode
             if cm == COPTER_MODE['RTL']:
                 print('[OK] 任务结束, 飞控已进入 RTL 返航')
@@ -584,7 +640,7 @@ def wait_auto_mission(master, n_wp, end_action, timeout=600.0):
                 return True
             if cm != COPTER_MODE['AUTO'] and last_seq >= 0:
                 name = _mode_name_from_id(cm)
-                if end_action == 'none' and last_seq >= n_wp - 1:
+                if end_action == 'none' and last_seq >= n_wp:
                     print('[OK] 任务完成, 已离开 AUTO (当前 %s)' % name)
                     return True
                 print('警告: 任务中离开 AUTO 模式 -> %s' % name)
@@ -600,7 +656,7 @@ def wait_auto_mission(master, n_wp, end_action, timeout=600.0):
                 if 'reject' in low or 'fail' in low or 'error' in low:
                     return False
 
-        if end_action == 'none' and last_seq >= n_wp - 1:
+        if end_action == 'none' and last_seq >= n_wp:
             now = time.time()
             if hold_since is None:
                 hold_since = now
@@ -861,14 +917,14 @@ def disarm(master, force=False, timeout=5.0):
         print('[OK] 已是上锁状态 (DISARMED)')
         return True
 
-    param1 = 21196 if force else 0
+    param2 = 21196 if force else 0
     print('发送 DISARM%s...' % (' (强制)' if force else ''))
     while master.recv_match(blocking=False):
         pass
     master.mav.command_long_send(
         master.target_system, master.target_component,
         mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
-        param1, 0, 0, 0, 0, 0, 0)
+        0, param2, 0, 0, 0, 0, 0)
 
     t_end = time.time() + timeout
     while time.time() < t_end:
@@ -1116,6 +1172,7 @@ def run_test_mission(master, args):
     arm_and_takeoff(master, take_alt, mode='GUIDED')
 
     print('[4/5] 切换 AUTO 开始执行航点任务...')
+    reset_mission_to_start(master)
     set_mode(master, 'AUTO')
 
     ok = wait_auto_mission(master, n_wp=len(wps),

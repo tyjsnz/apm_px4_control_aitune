@@ -654,20 +654,20 @@ def arm_and_takeoff(master, alt, mode='GUIDED', arm_timeout=10,
 
 
 def disarm_vehicle(master, force=False, timeout=5, _fallback=False):
-    """上锁电机. force=True 时强制上锁(21196), 仅地面/异常时使用.
+    """上锁电机. force=True 时 param2=21196 强制上锁, 仅地面/异常时使用.
     v1.24: 当前方式被固件拒绝时自动换另一种方式再试一次
-    (_fallback 防双向循环; 实机遇过 force 返回 UNSUPPORTED=3).
+    (_fallback 防双向循环; 21196 必须放 param2, 放 param1 会回 UNSUPPORTED=3).
     返回 True/False"""
     if not master.motors_armed():
         print("  ℹ️ 电机已是上锁状态")
         return True
-    param1 = 21196 if force else 0
+    param2 = 21196 if force else 0
     print("  发送 DISARM 命令..." + (" (强制)" if force else ""))
     drain_rx(master)
     master.mav.command_long_send(
         master.target_system, master.target_component,
         mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
-        param1, 0, 0, 0, 0, 0, 0)
+        0, param2, 0, 0, 0, 0, 0)
 
     t_end = time.time() + timeout
     while time.time() < t_end:
@@ -767,7 +767,7 @@ def wait_for_alt(master, target_alt, tolerance=0.5, timeout=60):
 
 def send_zero_velocity(master, count=20):
     """发送零速度指令让飞机悬停"""
-    type_mask = 0b0000110111000011
+    type_mask = 0b0000110111000111
     for _ in range(count):
         master.mav.set_position_target_local_ned_send(
             0, master.target_system, master.target_component,
@@ -1260,7 +1260,7 @@ def test_05_velocity_forward(master):
     print(f"➡️ 测试5：前进速度 {TEST_SPEED} m/s，持续 {TEST_DURATION}s")
     print("="*50)
 
-    type_mask = 0b0000110111000011
+    type_mask = 0b0000110111000111
     start = time.time()
 
     while time.time() - start < TEST_DURATION:
@@ -1288,7 +1288,7 @@ def test_06_velocity_side(master):
     print(f"↪️ 测试6：侧向速度 {TEST_SPEED} m/s，持续 {TEST_DURATION}s")
     print("="*50)
 
-    type_mask = 0b0000110111000011
+    type_mask = 0b0000110111000111
     start = time.time()
 
     while time.time() - start < TEST_DURATION:
@@ -1316,7 +1316,7 @@ def test_07_velocity_up(master):
     print(f"⬆️ 测试7：垂直上升 {TEST_SPEED} m/s，持续 {TEST_DURATION}s")
     print("="*50)
 
-    type_mask = 0b0000110111000011
+    type_mask = 0b0000110111000111
     start = time.time()
 
     while time.time() - start < TEST_DURATION:
@@ -1344,7 +1344,7 @@ def test_08_hover(master):
     print(f"⏸ 测试8：悬停 {TEST_DURATION}s，观察高度漂移")
     print("="*50)
 
-    type_mask = 0b0000110111000011
+    type_mask = 0b0000110111000111
     start = time.time()
     altitudes = []
 
@@ -1522,7 +1522,7 @@ def test_12_status(master):
         elif mtype == 'GPS_RAW_INT':
             st['fix'] = msg.fix_type
             st['sats'] = msg.satellites_visible
-            st['hdop'] = msg.eph if msg.eph != 65535 else None
+            st['hdop'] = msg.eph * 0.01 if msg.eph != 65535 else None
         elif mtype == 'GLOBAL_POSITION_INT':
             st['lat'] = msg.lat / 1e7
             st['lon'] = msg.lon / 1e7

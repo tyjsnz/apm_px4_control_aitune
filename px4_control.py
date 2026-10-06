@@ -357,7 +357,7 @@ def set_velocity(master, vx, vy, vz=0.0):
         master.target_system,
         master.target_component,
         mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        0b111111000111,  # type_mask: 忽略位置/加速度/偏航, 只使用 vx/vy/vz
+        0b110111000111,  # type_mask: 忽略位置/加速度/偏航, 只使用 vx/vy/vz
         0, 0, 0,          # lat/lon/alt(忽略, 填0)
         vx, vy, vz,       # 北东地速度分量
         0, 0, 0,          # afx, afy, afz
@@ -861,14 +861,14 @@ def disarm(master, force=False, timeout=5.0):
         print('[OK] 已是上锁状态 (DISARMED)')
         return True
 
-    param1 = 21196 if force else 0
+    param2 = 21196 if force else 0
     print('发送 DISARM%s...' % (' (强制)' if force else ''))
     while master.recv_match(blocking=False):
         pass
     master.mav.command_long_send(
         master.target_system, master.target_component,
         mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
-        param1, 0, 0, 0, 0, 0, 0)
+        0, param2, 0, 0, 0, 0, 0)
 
     t_end = time.time() + timeout
     while time.time() < t_end:

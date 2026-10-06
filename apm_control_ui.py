@@ -27,9 +27,8 @@ APM 功能测试 UI 界面 (apm_control_ui.py)
   - 参数读写面板: 飞控参数读取/写入 + 历史
   - RC覆盖滑条: 4通道覆盖(仅地面调试, 任务运行时自动释放)
   - 航点任务: 解析/上传/一键执行(复用 apm_control.py), 支持 DROP 行
-    自动抛投 (到航点后 DO_SET_SERVO + NAV_DELAY 保持 + 回位)
-  - 雷达目标接口: 订阅 RK3576 radar-display 对外数据通道(TCP 9100 NDJSON),
-    把扫描到的目标 经纬度/高度 填入航点任务文本框(只填充, 不上传不执行)
+    自动抛投 (到航点后 DO_SET_SERVO + NAV_DELAY 保持 + 回位),
+    航点与单点目的地均由用户自行填写 GPS 数据
   - 测试报告导出
   - 遥测消息速率表
 
@@ -42,7 +41,6 @@ import csv
 import math
 import os
 import queue
-import socket
 import sys
 import threading
 import time
@@ -86,19 +84,6 @@ CSV_DIR = 'flight_logs'    # 飞行日志目录
 # 软遥控方向: 实机方向相反时把对应项改为 -1 (键位: W前/S后 A左/D右 Q左/E右)
 SOFT_RC_INVERT = {'pitch': 1, 'roll': 1, 'yaw': 1}
 
-# ============ 雷达目标接口 (RK3576 radar-display 对外数据通道) ============
-# 雷达显控程序自带"对外数据通道"(publish.mjs), 扫描结果变化即推一行 JSON,
-# 连上就能收, 雷达端无需改动:
-#   nc 192.168.1.2 9100   -> {"v":1,"type":"radar.data","seq":..,"ts":..,
-#                             "status":{"site":{"lon","lat","alt"},...},
-#                             "targets":[{lon,lat,alt,height,distance,
-#                                        azimuth,source,...}, ...]}
-RADAR_HOST = '192.168.1.2'        # radar-display 板子地址
-RADAR_PORT = 9100                 # 对外数据通道 TCP 端口 (NDJSON)
-RADAR_RETRY_SEC = 3.0             # 断线/连不上时的重连间隔
-RADAR_REFRESH_SEC = 0.4           # 收到帧后刷新 GUI 的最小间隔(秒)
-RADAR_LINE_MAX = 4 * 1024 * 1024  # 单条帧缓冲上限(防异常流撑爆内存)
-
 FIX_NAMES = {0: '无定位', 1: '无GPS', 2: '2D', 3: '3D',
              4: 'DGPS', 5: 'RTK浮', 6: 'RTK固'}
 SYS_NAMES = {0: 'UNINIT', 1: 'BOOT', 2: 'CALIBRATING', 3: 'STANDBY',
@@ -129,36 +114,6 @@ def _fnum(sv, default=0.0):
         return float(sv.get())
     except Exception:
         return default
-
-
-def _num_or_none(v):
-    """任意输入 → float; 非法/NaN/Inf 返回 None"""
-    try:
-        x = float(v)
-    except (TypeError, ValueError):
-        return None
-    return x if math.isfinite(x) else None
-
-
-def _radar_offset_latlon(site_lat, site_lon, dist_m, az_deg):
-    """架设点 + 距离/方位 反算经纬度 (与 radar-display uplink.mjs 同算法).
-    任一输入缺失或越界返回 (None, None); 方位 0°=正北, 顺时针, 距离单位 m"""
-    if site_lat is None or site_lon is None:
-        return None, None
-    d = _num_or_none(dist_m)
-    az = _num_or_none(az_deg)
-    if d is None or az is None:
-        return None, None
-    r = math.radians(az)
-    km = d / 1000.0
-    lat = site_lat + (km * math.cos(r)) / 110.574
-    lng_km = 111.32 * math.cos(math.radians(site_lat)) or 111.32
-    lon = site_lon + (km * math.sin(r)) / lng_km
-    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        return None, None
-    if lat == 0 or lon == 0:
-        return None, None
-    return lat, lon
 
 
 # ============ 地图底图源 (默认 Esri 卫星影像: WGS-84 免密钥) ============
@@ -420,105 +375,6 @@ class TeeWriter:
 
 
 # ============================================================
-#  雷达目标接口: 订阅 RK3576 radar-display 对外数据通道
-# ============================================================
-
-class RadarTargetClient(threading.Thread):
-    """订阅 radar-display 对外数据通道 (TCP NDJSON, 默认 192.168.1.2:9100).
-
-    雷达端 publish.mjs 在每次扫描结果变化时推一行 JSON (radar.data),
-    本线程只负责: 连接/断线重连/按行取包/JSON 解析, 结果经 on_payload
-    交给 UI (回调跑在本后台线程, 不能直接碰 Tk 控件).
-    复用雷达已有发布通道, 雷达端零改动."""
-
-    def __init__(self, host, port, on_payload, on_log):
-        super(RadarTargetClient, self).__init__(name='radar-sub')
-        self.daemon = True
-        self.host = host
-        self.port = port
-        self.on_payload = on_payload
-        self.on_log = on_log
-        self._stop_ev = threading.Event()
-        self._sock = None
-
-    def stop(self):
-        """断开并退出线程 (可从任意线程调用)"""
-        self._stop_ev.set()
-        s = self._sock
-        if s is not None:
-            try:
-                s.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                s.close()
-            except OSError:
-                pass
-
-    def run(self):
-        tries = 0
-        had_conn = False
-        while not self._stop_ev.is_set():
-            sock = None
-            reason = None
-            try:
-                sock = socket.create_connection((self.host, self.port),
-                                                timeout=5.0)
-                sock.settimeout(0.5)
-                self._sock = sock
-                tries = 0
-                if not had_conn:
-                    had_conn = True
-                    self.on_log('✅ 已连接雷达数据通道 %s:%d (NDJSON, 只收不发)'
-                                % (self.host, self.port))
-                buf = b''
-                while not self._stop_ev.is_set():
-                    try:
-                        chunk = sock.recv(65536)
-                    except socket.timeout:
-                        continue
-                    if not chunk:
-                        reason = '对端关闭连接'
-                        break
-                    buf += chunk
-                    if len(buf) > RADAR_LINE_MAX:
-                        buf = b''
-                        continue
-                    while b'\n' in buf:
-                        line, buf = buf.split(b'\n', 1)
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            msg = json.loads(line.decode('utf-8'))
-                        except (ValueError, UnicodeDecodeError):
-                            continue
-                        if isinstance(msg, dict):
-                            self.on_payload(msg)
-            except Exception as e:
-                reason = '%s: %s' % (type(e).__name__, e)
-            finally:
-                self._sock = None
-                if sock is not None:
-                    try:
-                        sock.close()
-                    except OSError:
-                        pass
-            if self._stop_ev.is_set():
-                break
-            tries += 1
-            if had_conn:
-                had_conn = False
-                self.on_log('⚠️ 雷达数据通道断开(%s), %.0fs 后重连'
-                            % (reason, RADAR_RETRY_SEC))
-            elif tries == 1 or tries % 10 == 0:
-                # 连不上只在首次和之后每10次(约30s)提示一次, 避免刷屏
-                self.on_log('❌ 连不上雷达 %s:%d (%s), 继续重试'
-                            % (self.host, self.port, reason))
-            self._stop_ev.wait(RADAR_RETRY_SEC)
-
-
-# ============================================================
 #  MAVLink 包装: 单读线程 + 指令监听 + 测试用 recv_match 队列
 # ============================================================
 
@@ -762,15 +618,6 @@ class AmpUI(object):
 
         # 测试报告
         self.last_results = collections.OrderedDict()
-
-        # 雷达目标接口 (订阅 radar-display 对外数据通道; 后台线程写, GUI 读)
-        self.radar_cli = None            # RadarTargetClient 实例
-        self.radar_lock = threading.Lock()
-        self.radar_targets = []          # 最近一帧可填充目标
-        self.radar_total = 0             # 最近一帧原始目标数
-        self.radar_last_t = 0.0          # 最近一帧时间戳(收到时刻)
-        self._radar_ui_t = 0.0           # GUI 刷新节流
-        self._radar_auto_key = None      # 自动填充去重(已写入文本框的内容)
 
         # 遥测消息速率 (读线程写, GUI 读)
         self.msg_lock = threading.Lock()
@@ -1758,7 +1605,7 @@ class AmpUI(object):
             elif mtype == 'GPS_RAW_INT':
                 t['fix'] = msg.fix_type
                 t['sats'] = msg.satellites_visible
-                t['hdop'] = None if msg.eph == 65535 else msg.eph
+                t['hdop'] = None if msg.eph == 65535 else msg.eph * 0.01
                 t['gps_t'] = time.time()
                 # v1.21: 空中GPS失联提示(节流10s, 仅提示不动作, 惯导继续)
                 if (isinstance(msg.fix_type, int) and msg.fix_type < 3
@@ -2043,7 +1890,7 @@ class AmpUI(object):
         mode = self.var_mode.get().strip().upper()
 
         def fn():
-            p.set_mode_apm(mode)
+            apc.set_mode(p, mode)
             self._log_line('  ✅ 已切换 %s' % mode)
             return True
         self._enqueue('切换模式 %s' % mode, fn)
@@ -2065,9 +1912,15 @@ class AmpUI(object):
             self.target_speed = spd
         else:
             self.target_speed = 0.0
-        type_mask = 0b0000110111000011
+        type_mask = 0b0000110111000111
 
         def fn():
+            if vx or vy or vz:
+                with self.tel_lock:
+                    cur = self.tel.get('mode')
+                if cur and cur != 'GUIDED' and not str(cur).startswith('MODE('):
+                    print('  ⚠️ 当前模式 %s, 速度指令仅 GUIDED 生效, '
+                          '飞控会忽略本条 (先[切换模式]GUIDED)' % cur)
             t = time.time() + 1.0
             while time.time() < t and self.action_busy.is_set():
                 p.mav.set_position_target_local_ned_send(
@@ -2533,14 +2386,9 @@ class AmpUI(object):
         ttk.Label(f, text='巡航m/s 留空=不改飞控参数 (范围 0.2~20; '
                           '固件 WPNAV_SPEED 上限 2000cm/s=20m/s)',
                   style='Gray.TLabel').pack(anchor='w', pady=(3, 0))
-        # --- 雷达填充单点目的地 ---
-        rrf = ttk.Frame(f)
-        rrf.pack(fill='x', pady=(6, 0))
-        ttk.Label(rrf, text='雷达填充:').pack(side='left')
-        ttk.Button(rrf, text='填充单点目的地(最新目标)',
-                   command=self.on_radar_fill_guided).pack(side='left', padx=(6, 2))
-        ttk.Label(rrf, text='(使用雷达面板的高度源设置)',
-                  style='Gray.TLabel').pack(side='left', padx=8)
+        ttk.Label(f, text='目的地由用户自行填写 GPS 数据: '
+                          '纬度,经度 或 @东x,北y(相对飞机GPS), 高度填在右侧高度m',
+                  style='Gray.TLabel').pack(anchor='w', pady=(3, 0))
         spr = ttk.Frame(f)
         spr.pack(fill='x', pady=(2, 0))
         ttk.Button(spr, text='读飞控速度参数', width=14,
@@ -2556,28 +2404,6 @@ class AmpUI(object):
         ttk.Label(mode_row, text='当前模式:').pack(side='left')
         ttk.Label(mode_row, textvariable=self.tel_labels['mode'],
                   font=('Consolas', 10, 'bold')).pack(side='left', padx=4)
-
-    def on_radar_fill_guided(self):
-        """把雷达最新目标填入单点飞行目的地框"""
-        lines = self._radar_build_lines()
-        if not lines:
-            with self.radar_lock:
-                n = len(self.radar_targets)
-            self._log_line('❌ 无可填充雷达目标 (已收 %d 个%s)'
-                           % (n, ', "仅跟踪航迹"过滤后为 0'
-                              if n else '; 请先[连接雷达]并等待扫描结果'))
-            return
-        # 取第一行 (最新目标) 解析 lat,lon,alt
-        first = lines[0].strip()
-        parts = [x.strip() for x in first.split(',')]
-        if len(parts) >= 3:
-            lat, lon, alt = parts[0], parts[1], parts[2]
-            self.var_dest.set('%s,%s' % (lat, lon))
-            self.var_dest_alt.set(alt)
-            self._log_line('🛰 雷达最新目标已填入单点目的地: %.6f, %.6f 高 %sm'
-                           % (float(lat), float(lon), alt))
-        else:
-            self._log_line('❌ 雷达目标格式异常: %r' % first)
 
     def _build_tab_mission(self):
         """AUTO 航点任务: 固定航线按序飞+抛投"""
@@ -2600,57 +2426,10 @@ class AmpUI(object):
                           '  # 注释',
                   style='Gray.TLabel').pack(anchor='w', pady=(3, 0))
 
-        # --- 雷达目标接口: 订阅 radar-display 对外数据通道, 只填充不执行 ---
-        rr = ttk.Frame(f)
-        rr.pack(fill='x', pady=(6, 0))
-        ttk.Label(rr, text='雷达目标:').pack(side='left')
-        self.var_radar_host = tk.StringVar(value=RADAR_HOST)
-        ttk.Entry(rr, textvariable=self.var_radar_host, width=14).pack(
-            side='left', padx=(4, 2))
-        ttk.Label(rr, text='端口:').pack(side='left')
-        self.var_radar_port = tk.StringVar(value=str(RADAR_PORT))
-        ttk.Entry(rr, textvariable=self.var_radar_port, width=6).pack(
-            side='left', padx=2)
-        ttk.Button(rr, text='连接雷达',
-                   command=self.on_radar_connect).pack(side='left', padx=(6, 2))
-        ttk.Button(rr, text='断开',
-                   command=self.on_radar_disconnect).pack(side='left', padx=2)
-        self.var_radar_st = tk.StringVar(
-            value='雷达: 未连接 (radar-display 对外数据通道 TCP %d)' % RADAR_PORT)
-        ttk.Label(rr, textvariable=self.var_radar_st, style='Gray.TLabel'
-                  ).pack(side='left', padx=8)
-
-        rf = ttk.Frame(f)
-        rf.pack(fill='x', pady=(3, 0))
-        ttk.Label(rf, text='高度源:').pack(side='left')
-        self.var_radar_alt_src = tk.StringVar(value='相对场地')
-        ttk.Combobox(rf, textvariable=self.var_radar_alt_src, width=12,
-                     state='readonly',
-                     values=('相对场地', '绝对高度', '固定值')
-                     ).pack(side='left', padx=(4, 2))
-        ttk.Label(rf, text='固定值m:').pack(side='left')
-        self.var_radar_fix_alt = tk.StringVar(value='30')
-        ttk.Entry(rf, textvariable=self.var_radar_fix_alt, width=5).pack(
-            side='left', padx=2)
-        self.var_radar_track_only = tk.BooleanVar(value=False)
-        ttk.Checkbutton(rf, text='仅跟踪航迹',
-                        variable=self.var_radar_track_only).pack(
-            side='left', padx=(8, 0))
-        self.var_radar_auto = tk.BooleanVar(value=False)
-        ttk.Checkbutton(rf, text='更新自动填充(替换)',
-                        variable=self.var_radar_auto).pack(
-            side='left', padx=6)
-        ttk.Button(rf, text='填充(替换)',
-                   command=lambda: self.on_radar_fill(False)).pack(
-            side='left', padx=(10, 2))
-        ttk.Button(rf, text='追加',
-                   command=lambda: self.on_radar_fill(True)).pack(
-            side='left', padx=2)
-        ttk.Label(f, text='雷达目标只写入下方文本框, 不会上传/执行; '
-                          '确认无误后再点 [校验]/[仅上传]/[执行]; '
-                          '高度源: 相对场地=雷达绝对高-架设点高(无则用目标高度), '
-                          '绝对高度=雷达alt(MSL, 任务按相对起飞点解析需自行换算)',
-                  style='Gray.TLabel').pack(anchor='w', pady=(3, 0))
+        ttk.Label(f, text='航点由用户自行填写 GPS 数据 (直接编辑下方文本框, 或点 '
+                          '[加载 waypoints.txt]), 校验无误后再 '
+                          '[仅上传]/[执行]',
+                  style='Gray.TLabel').pack(anchor='w', pady=(6, 0))
 
         self.txt_wp = tk.Text(f, height=9, font=('Consolas', 10),
                               bg='#141414', fg='#d8d8d8', wrap='none')
@@ -3847,6 +3626,9 @@ class AmpUI(object):
                 return False
             wps2 = [x for x in items2 if not apc._is_drop(x)]
             takeoff_alt2 = max(tct.TAKEOFF_ALT, max(w[2] for w in wps2))
+            dist = sum(_haversine(wps2[i][0], wps2[i][1],
+                                  wps2[i + 1][0], wps2[i + 1][1])
+                       for i in range(len(wps2) - 1))
             n_items = apc.upload_mission(p, items2)
             if not n_items:
                 print('  ❌ 任务上传失败')
@@ -3855,180 +3637,20 @@ class AmpUI(object):
                 print('  ❌ 起飞失败, 任务取消')
                 return False
             self.target_alt = takeoff_alt2
+            apc.reset_mission_to_start(p)
             try:
                 apc.set_mode(p, 'AUTO')
             except SystemExit as e:
                 print('  ❌ 切 AUTO 失败: %s' % e)
                 return False
+            timeout = 120 + 30 * len(wps2) + dist
+            print('  任务超时预算 %d 秒 (航线 %.0f m + 每航点 30s)'
+                  % (int(timeout), dist))
             return apc.wait_auto_mission(
-                p, n_items if isinstance(n_items, int) else len(items),
-                'rtl', timeout=60 + 30 * len(wps))
+                p, int(n_items), 'rtl', timeout=timeout)
         self._enqueue('执行任务(%d航点, %d 抛投, 起飞%.0fm)'
                       % (len(wps), n_drop, takeoff_alt),
                       fn)
-
-    # ---------------- 雷达目标接口 (订阅 radar-display 数据通道) ----------------
-
-    def on_radar_connect(self):
-        """连上 radar-display 对外数据通道 (TCP NDJSON, 只收不发)"""
-        if self.radar_cli is not None and self.radar_cli.is_alive():
-            self._log_line('ℹ️ 雷达接口已连接')
-            return
-        host = self.var_radar_host.get().strip()
-        if not host:
-            self._log_line('❌ 请填写雷达地址 (radar-display 所在板子 IP)')
-            return
-        try:
-            port = int(self.var_radar_port.get().strip())
-        except ValueError:
-            self._log_line('❌ 雷达端口无效: %r' % self.var_radar_port.get())
-            return
-        if not 1 <= port <= 65535:
-            self._log_line('❌ 雷达端口需在 1~65535')
-            return
-        self.radar_cli = RadarTargetClient(host, port,
-                                           self._radar_on_payload,
-                                           self._log_line)
-        self.radar_cli.start()
-        self.var_radar_st.set('雷达: 连接中 %s:%d ...' % (host, port))
-        self._log_line('▶ 雷达接口连接中: %s:%d (radar-display 对外数据通道)'
-                       % (host, port))
-
-    def on_radar_disconnect(self):
-        """断开雷达订阅 (已收到的目标保留, 仍可填充)"""
-        cli = self.radar_cli
-        self.radar_cli = None
-        if cli is None:
-            self.var_radar_st.set('雷达: 未连接')
-            return
-        cli.stop()
-        with self.radar_lock:
-            n = len(self.radar_targets)
-        self.var_radar_st.set('雷达: 已断开 (保留最后 %d 个目标)' % n)
-        self._log_line('⏹ 雷达接口已断开 (保留最后 %d 个目标可填充)' % n)
-
-    def _radar_on_payload(self, msg):
-        """后台线程: 解析 radar.data 帧, 暂存可填充目标 (不碰 Tk 控件)"""
-        if msg.get('type') != 'radar.data':
-            return
-        st = msg.get('status')
-        site = st.get('site') if isinstance(st, dict) else None
-        site = site if isinstance(site, dict) else {}
-        s_lat = _num_or_none(site.get('lat'))
-        s_lon = _num_or_none(site.get('lon'))
-        s_alt = _num_or_none(site.get('alt'))
-        if s_lat == 0 or s_lon == 0:        # 0 视为未配置架设点
-            s_lat = s_lon = None
-        raw = msg.get('targets')
-        raw = raw if isinstance(raw, list) else []
-        out = []
-        for t in raw:
-            if not isinstance(t, dict) or t.get('deleted') or t.get('stale'):
-                continue                    # 已删除/已丢弃的航迹不进任务
-            lat = _num_or_none(t.get('lat'))
-            lon = _num_or_none(t.get('lon'))
-            if (lat is None or lon is None or lat == 0 or lon == 0
-                    or not (-90 <= lat <= 90 and -180 <= lon <= 180)):
-                # 雷达没给经纬度时按 架设点+距离+方位 反算
-                lat, lon = _radar_offset_latlon(s_lat, s_lon, t.get('distance'),
-                                                t.get('azimuth'))
-            if lat is None or lon is None:
-                continue
-            out.append({'lat': lat, 'lon': lon,
-                        'alt': _num_or_none(t.get('alt')),
-                        'height': _num_or_none(t.get('height')),
-                        'site_alt': s_alt,
-                        'src': t.get('source'), 'tid': t.get('trackId'),
-                        'dist': _num_or_none(t.get('distance')),
-                        'az': _num_or_none(t.get('azimuth'))})
-        with self.radar_lock:
-            self.radar_targets = out
-            self.radar_total = len(raw)
-            self.radar_last_t = time.time()
-        # 刷新 GUI 节流: 缓冲里永远是最新一帧, 丢掉的只是重复渲染
-        now = time.time()
-        if now - self._radar_ui_t >= RADAR_REFRESH_SEC:
-            self._radar_ui_t = now
-            try:
-                self.root.after(0, self._radar_ui_refresh)
-            except (RuntimeError, tk.TclError):
-                pass
-
-    def _radar_ui_refresh(self):
-        """主线程: 更新雷达状态; 勾了"更新自动填充"则按最新目标重写文本框"""
-        try:
-            with self.radar_lock:
-                n = len(self.radar_targets)
-                total = self.radar_total
-                last = self.radar_last_t
-            ts = time.strftime('%H:%M:%S', time.localtime(last)) if last \
-                else '--'
-            self.var_radar_st.set('雷达: 已收帧 · 目标 %d/%d · 最后 %s'
-                                  % (n, total, ts))
-            if not self.var_radar_auto.get():
-                return
-            lines = self._radar_build_lines()
-            if not lines or '\n'.join(lines) == self._radar_auto_key:
-                return
-            self._radar_write(lines, append=False, notify=False)
-        except tk.TclError:
-            return                         # 窗口正在关闭
-
-    def _radar_build_lines(self):
-        """按当前 UI 选择把雷达目标转成航点行 '纬度,经度,高度' (主线程)"""
-        src = self.var_radar_alt_src.get()
-        fix = _fnum(self.var_radar_fix_alt, 30.0)
-        if fix <= 0:
-            fix = 30.0
-        only_track = self.var_radar_track_only.get()
-        with self.radar_lock:
-            targets = list(self.radar_targets)
-        lines = []
-        for t in targets:
-            if only_track and t.get('src') != 'track':
-                continue
-            if src == '固定值':
-                alt = fix
-            elif src == '绝对高度':
-                alt = t.get('alt')          # 雷达给出的 MSL 高度
-            else:
-                # 相对场地: 雷达绝对高 - 架设点高; 缺失或<=0 退回目标高度
-                alt = None
-                if t.get('alt') is not None and t.get('site_alt') is not None:
-                    alt = t['alt'] - t['site_alt']
-                if alt is None or alt <= 0:
-                    alt = t.get('height')
-            if alt is None or alt <= 0:
-                alt = fix                   # 任务高度必须>0, 用固定值占位
-            lines.append('%.6f,%.6f,%.1f' % (t['lat'], t['lon'], alt))
-        return lines
-
-    def _radar_write(self, lines, append=False, notify=True):
-        """把行写入航点文本框 (主线程); 只填充, 不上传不执行"""
-        if not append:
-            self.txt_wp.delete('1.0', 'end')
-        self.txt_wp.insert('end', ''.join('%s\n' % l for l in lines))
-        self._radar_auto_key = '\n'.join(lines)
-        if notify:
-            self._log_line('🛰 雷达目标已%s %d 行到航点框 (仅填充, '
-                           '未上传/未执行)' % ('追加' if append else '替换',
-                                              len(lines)))
-            self.on_wp_check()
-        else:
-            self.var_wp_st.set('雷达自动填充 %d 个目标 (未上传/未执行)'
-                               % len(lines))
-
-    def on_radar_fill(self, append=False):
-        """把雷达扫描到的目标填进航点文本框 (替换/追加); 到此为止, 不执行"""
-        lines = self._radar_build_lines()
-        if not lines:
-            with self.radar_lock:
-                n = len(self.radar_targets)
-            self._log_line('❌ 无可填充雷达目标 (已收 %d 个%s)'
-                           % (n, ', "仅跟踪航迹"过滤后为 0'
-                              if n else '; 请先[连接雷达]并等待扫描结果'))
-            return
-        self._radar_write(lines, append=append)
 
     def _hint_takeover(self):
         self._log_line('ℹ️ GUIDED 下摇杆无效属正常; 接管: 按 F9 切 LOITER, '
@@ -4814,13 +4436,6 @@ class AmpUI(object):
                 pass
         self._cancel_pending_drop()
         self._stop_record()
-        cli = self.radar_cli
-        self.radar_cli = None
-        if cli is not None:
-            try:
-                cli.stop()
-            except Exception:
-                pass
         try:
             sys.stdout = self._orig_stdout
         except Exception:

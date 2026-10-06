@@ -1422,7 +1422,7 @@ class AmpUI(object):
             elif mtype == 'GPS_RAW_INT':
                 t['fix'] = msg.fix_type
                 t['sats'] = msg.satellites_visible
-                t['hdop'] = None if msg.eph == 65535 else msg.eph
+                t['hdop'] = None if msg.eph == 65535 else msg.eph * 0.01
                 # v1.21: 空中GPS失联提示(节流10s, 仅提示不动作, 惯导继续)
                 if (isinstance(msg.fix_type, int) and msg.fix_type < 3
                         and t.get('armed')
@@ -1721,7 +1721,7 @@ class AmpUI(object):
             self.target_speed = spd
         else:
             self.target_speed = 0.0
-        type_mask = 0b0000110111000011
+        type_mask = 0b0000110111000111
 
         def fn():
             t = time.time() + 1.0
