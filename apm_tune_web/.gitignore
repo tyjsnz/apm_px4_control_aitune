@@ -1,0 +1,15 @@
+# --- 依赖 ---
+node_modules/
+
+# --- 运行时数据（可能含 AI 密钥/串口备份/日志）---
+config/
+backups/
+faults/
+logs/
+*.log
+
+# --- 测试生成物 ---
+test/out/
+
+# --- OS ---
+.DS_Store

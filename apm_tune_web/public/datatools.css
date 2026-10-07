@@ -1,0 +1,342 @@
+/* 备份恢复 / 日志分析 样式 */
+.dt-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 18px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.dt-bar button {
+  padding: 5px 12px;
+}
+
+.dt-danger-btn {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.dt-status {
+  margin-left: 6px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.dt-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.dt-table-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 0 12px;
+  min-height: 0;
+}
+
+.dt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.dt-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border-color);
+  z-index: 2;
+}
+
+.dt-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--bg-tertiary);
+  vertical-align: middle;
+}
+
+.dt-table button {
+  padding: 3px 8px;
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.dt-mono {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+}
+
+.dt-link {
+  color: var(--accent);
+  text-decoration: none;
+  margin-right: 6px;
+}
+
+.dt-link:hover {
+  text-decoration: underline;
+}
+
+.dt-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 18px;
+}
+
+.dt-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  overflow: hidden;
+  min-height: 0;
+  padding: 8px 12px;
+}
+
+.dt-col {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.dt-col h4 {
+  margin: 0;
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--accent);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dt-ai {
+  padding: 8px 18px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.dt-ai h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.dt-ai-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.dt-ai-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.dt-ai-row input,
+.dt-ai-row select {
+  min-width: 140px;
+}
+
+.dt-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--warning);
+  line-height: 1.5;
+}
+
+.dt-report {
+  margin: 0;
+  height: 150px;
+  overflow: auto;
+  padding: 10px 16px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: pre-wrap;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.dt-report-lg {
+  height: 260px;
+  background: var(--bg-secondary);
+}
+
+/* 传感器图表 */
+.log-charts {
+  max-height: 340px;
+  overflow: auto;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-color);
+}
+
+.chart-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chart-tab {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.chart-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.chart-card {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin: 10px 0;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+}
+
+.chart-card h5 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chart-legend-item i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.chart-empty {
+  color: var(--text-muted);
+  padding: 14px;
+  text-align: center;
+}
+
+#viewBackup {
+  background: var(--bg-primary);
+}
+
+#viewLogs {
+  background: var(--bg-primary);
+}
+
+.dt-zero {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* ---------- 全局 AI 配置条 / 设置弹窗 ---------- */
+.ai-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-status {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.ai-status.configured {
+  color: var(--success);
+  border-color: rgba(63, 185, 80, 0.45);
+}
+
+.ai-modal-box {
+  width: 560px;
+}
+
+.ai-modal-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.ai-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.ai-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ai-form input,
+.ai-form select {
+  padding: 7px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.ai-remember {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px !important;
+  color: var(--text-primary);
+}
+
+.ai-remember input {
+  width: auto;
+}
+
+.ai-note {
+  margin-top: 2px;
+}

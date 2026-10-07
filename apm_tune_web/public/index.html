@@ -1,0 +1,340 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ArduPilot Copter 调参速查工具</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="onetouch.css" />
+  <link rel="stylesheet" href="datatools.css" />
+  <link rel="stylesheet" href="fault.css" />
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>ArduPilot Copter 调参速查</h1>
+      <span id="fwVersion" class="badge">固件: --</span>
+    </div>
+    <div class="header-right">
+      <span id="status" class="status-badge disconnected">未连接</span>
+      <button id="btnReboot" disabled title="重启飞控">重启飞控</button>
+    </div>
+  </header>
+
+  <section class="toolbar">
+    <select id="portSelect"><option value="">请选择串口</option></select>
+    <input id="baudInput" type="number" value="115200" placeholder="波特率" />
+    <button id="btnConnect">连接</button>
+    <button id="btnDisconnect" disabled>断开</button>
+    <button id="btnRefreshParams" disabled title="手动刷新参数">刷新参数</button>
+    <div class="telemetry-panel" id="telemetryPanel" style="display:none;">
+      <span id="telLat" class="tel-item">纬度: --</span>
+      <span id="telLon" class="tel-item">经度: --</span>
+      <span id="telAlt" class="tel-item">高度: --</span>
+      <span id="telSpeed" class="tel-item">速度: --</span>
+      <span id="telBattery" class="tel-item">电池: --</span>
+    </div>
+  </section>
+
+  <nav class="view-tabs">
+    <button id="tabParams" class="view-tab active" data-view="params">参数速查</button>
+    <button id="tabOnetouch" class="view-tab" data-view="onetouch">一键首飞</button>
+    <button id="tabBackup" class="view-tab" data-view="backup">备份恢复</button>
+    <button id="tabLogs" class="view-tab" data-view="logs">日志分析</button>
+    <button id="tabFault" class="view-tab" data-view="fault">故障速查</button>
+  </nav>
+
+  <!-- ==================== 参数速查 ==================== -->
+  <div id="viewParams" class="view">
+    <section class="thrust-check" id="thrustCheck">
+      <div class="tc-head" id="tcHead" title="点击展开/收起">
+        <h3>推力线性化体检</h3>
+        <span id="tcSummary" class="tc-summary">未连接</span>
+        <span id="tcToggle" class="tc-toggle">收起 ▲</span>
+      </div>
+      <div class="tc-body" id="tcBody">
+        <div class="tc-rows" id="tcRows"></div>
+        <div class="tc-verdict" id="tcVerdict">连接飞控并读取参数后自动评估。</div>
+      </div>
+    </section>
+
+    <section class="search-bar">
+      <input type="text" id="paramSearch" placeholder="搜索参数名或描述..." disabled />
+      <select id="categoryFilter" disabled>
+        <option value="all">全部分类</option>
+      </select>
+      <label class="star-filter">
+        <input type="checkbox" id="starFilter" /> 仅显示重点参数(*)
+      </label>
+    </section>
+
+    <section class="main">
+      <aside id="categoryList"></aside>
+      <main id="paramPanel">
+        <div class="empty-state">
+          <p>连接飞控后自动加载参数</p>
+          <p class="hint">也可点击左侧分类手动浏览参数表</p>
+        </div>
+      </main>
+    </section>
+  </div>
+
+  <!-- ==================== 一键首飞 ==================== -->
+  <div id="viewOnetouch" class="view hidden">
+    <div class="ot-inputs">
+      <label>用途
+        <select id="otPurpose">
+          <option>首飞(安全保守)</option>
+          <option>GUIDED 外部引导追踪</option>
+          <option>AUTO 任务航点</option>
+        </select>
+      </label>
+      <label>桨径
+        <select id="otSize">
+          <option>5寸</option><option>7寸</option><option>10寸</option>
+          <option>13寸</option><option>15寸</option><option>20寸</option><option>30寸</option>
+        </select>
+      </label>
+      <label>电池
+        <select id="otCells">
+          <option>4S</option><option>5S</option><option selected>6S</option>
+          <option>8S</option><option>10S</option><option>12S</option>
+        </select>
+      </label>
+      <label>悬停油门
+        <input id="otHover" type="number" step="0.01" value="0.25" />
+      </label>
+      <label>档位
+        <select id="otProfile">
+          <option>更保守</option>
+          <option selected>标准</option>
+          <option>更激进</option>
+        </select>
+      </label>
+      <label class="ot-inline">
+        <input type="checkbox" id="otEsc" /> 电调已内置推力线性化
+      </label>
+      <button id="otBtnHelp">📖 帮助</button>
+      <span id="otStatus" class="ot-status bad">未连接</span>
+    </div>
+
+    <div class="ot-stages" id="otStages"></div>
+
+    <div class="ot-actions">
+      <button id="otBtnPlan">① 生成方案</button>
+      <button id="otBtnRead" disabled>② 读取当前值(体检)</button>
+      <button id="otBtnWrite" disabled>③ 一键写入(先自动备份)</button>
+      <span class="ot-aux-label">辅助:</span>
+      <button id="otCalGyro">陀螺校准</button>
+      <button id="otCalBaro">气压校准</button>
+      <button id="otCalLevel">水平校准</button>
+      <button id="otCalAccel">六面加速度计(向导)</button>
+      <button id="otSpin" class="ot-danger-btn">⚠ 拆桨实测起转(自动定 SPIN_ARM)</button>
+      <button id="otBtnClear">清空报告</button>
+    </div>
+
+    <div class="ot-body">
+      <div class="ot-table-wrap">
+        <table class="ot-table">
+          <thead>
+            <tr>
+              <th class="ot-col-chk">写入</th>
+              <th class="ot-col-stage">阶段</th>
+              <th class="ot-col-name">参数名</th>
+              <th class="ot-col-cur">当前值</th>
+              <th class="ot-col-new">推荐值(可改)</th>
+              <th class="ot-col-unit">单位</th>
+              <th class="ot-col-basis">依据 / 说明</th>
+            </tr>
+          </thead>
+          <tbody id="otTableBody"></tbody>
+        </table>
+      </div>
+      <pre id="otReport" class="ot-report"></pre>
+    </div>
+  </div>
+
+  <!-- ==================== 备份恢复 ==================== -->
+  <div id="viewBackup" class="view hidden">
+    <div class="dt-bar">
+      <button id="btnParamBackup" disabled>① 备份全部参数</button>
+      <button id="btnBackupRefresh">刷新列表</button>
+      <span id="backupStatus" class="dt-status">未获取</span>
+      <span class="dt-hint">备份文件保存在服务器 backups/ 目录，可下载到本地或一键恢复到飞控</span>
+    </div>
+    <div class="dt-table-wrap">
+      <table class="dt-table">
+        <thead>
+          <tr>
+            <th>类型</th><th>时间</th><th>参数数</th><th>固件</th><th>文件</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="backupTableBody"></tbody>
+      </table>
+    </div>
+    <pre id="backupReport" class="dt-report"></pre>
+  </div>
+
+  <!-- ==================== 日志分析 ==================== -->
+  <div id="viewLogs" class="view hidden">
+    <div class="dt-bar">
+      <button id="btnLogRefresh" disabled>刷新飞控日志</button>
+      <button id="btnLogDownload" disabled>下载选中</button>
+      <button id="btnLogDownloadAnalyze" disabled>下载并分析选中</button>
+      <button id="btnLogErase" disabled class="dt-danger-btn">清除飞控日志</button>
+      <button id="btnLogLocalRefresh">刷新本地</button>
+      <span id="logStatus" class="dt-status">未获取</span>
+    </div>
+
+    <div class="dt-grid">
+      <div class="dt-col">
+        <h4>飞控日志</h4>
+        <div class="dt-table-wrap">
+          <table class="dt-table">
+            <thead>
+              <tr><th>选择</th><th>ID</th><th>大小</th><th>时间(UTC)</th></tr>
+            </thead>
+            <tbody id="fcLogTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="dt-col">
+        <h4>本地已下载</h4>
+        <div class="dt-table-wrap">
+          <table class="dt-table">
+            <thead>
+              <tr><th>文件</th><th>大小</th><th>操作</th></tr>
+            </thead>
+            <tbody id="localLogTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="dt-ai">
+      <h4>AI 分析设置 <span class="dt-hint">（全局配置，日志分析与故障速查共用）</span></h4>
+      <div class="ai-bar">
+        <span id="aiStatus" class="ai-status">AI: 未配置</span>
+        <button id="aiSettingsBtn">⚙ AI 设置</button>
+        <button id="aiClearStoredKey" class="dt-danger-btn">清除 Key</button>
+      </div>
+      <p class="dt-note">🔒 在「AI 设置」中配置，设置一次全局共用（日志分析与故障速查）。勾选「记住 API Key」会保存到本机服务器 config/ai_config.json（仅建议本地部署）；不勾选则仅本次服务运行期间有效。</p>
+    </div>
+
+    <div class="dt-bar">
+      <button id="btnLogAnalyze" disabled>分析选中日志并生成报告</button>
+      <button id="btnLogReportExport" disabled>导出报告(.md)</button>
+      <button id="btnChartExportHtml" disabled>导出报告(HTML, 含图表)</button>
+      <span id="logAnalyzeStatus" class="dt-status"></span>
+    </div>
+    <div id="logCharts" class="log-charts"></div>
+    <pre id="logReport" class="dt-report dt-report-lg"></pre>
+  </div>
+
+  <!-- ==================== 故障速查 ==================== -->
+  <div id="viewFault" class="view hidden">
+    <div class="dt-bar">
+      <button id="ftNew">＋ 新建记录</button>
+      <button id="ftRefresh">刷新列表</button>
+      <button id="ftSave">💾 保存</button>
+      <button id="ftDelete" class="dt-danger-btn">删除当前</button>
+      <button id="ftExport">导出 Markdown</button>
+      <span id="ftStatus" class="dt-status">未连接</span>
+      <span class="dt-hint">记录永久保存在服务器 faults/ 目录；AI 使用全局配置（见「AI 设置」）</span>
+    </div>
+
+    <div class="ft-layout">
+      <aside class="ft-list">
+        <input id="ftSearch" class="ft-search" type="text" placeholder="搜索标题/现象/标签/机型..." />
+        <div class="ft-table-wrap">
+          <table class="dt-table">
+            <thead>
+              <tr><th>更新时间</th><th>标题</th><th>严重</th><th>状态</th></tr>
+            </thead>
+            <tbody id="ftTableBody"></tbody>
+          </table>
+        </div>
+        <div id="ftListMeta" class="ft-meta"></div>
+      </aside>
+
+      <div class="ft-editor">
+        <div class="ft-form">
+          <div class="ft-grid">
+            <label>标题
+              <input id="ftTitle" type="text" placeholder="一句话概括故障" />
+            </label>
+            <label>机型/机架
+              <input id="ftAircraft" type="text" placeholder="如 5寸穿越机 / F450" />
+            </label>
+            <label>固件
+              <input id="ftFirmware" type="text" placeholder="如 ArduCopter 4.6.0 / PX4 1.15" />
+            </label>
+            <label>严重程度
+              <select id="ftSeverity">
+                <option value="info">提示</option>
+                <option value="low">轻微</option>
+                <option value="mid" selected>中等</option>
+                <option value="high">严重</option>
+              </select>
+            </label>
+            <label>解决状态
+              <select id="ftStatus">
+                <option value="open" selected>未解决</option>
+                <option value="monitor">观察中</option>
+                <option value="fixed">已解决</option>
+              </select>
+            </label>
+            <label>标签
+              <input id="ftTags" type="text" placeholder="逗号分隔, 如 电调,解锁,EKF" />
+            </label>
+          </div>
+          <label class="ft-block">故障现象
+            <textarea id="ftSymptom" rows="3" placeholder="什么情况下出现、频率、是否可复现、有无报警..."></textarea>
+          </label>
+          <label class="ft-block">上下文 / 日志 / 已做操作
+            <textarea id="ftContext" rows="3" placeholder="相关参数值、日志片段、STATUSTEXT、已经检查过或改动过的项..."></textarea>
+          </label>
+          <label class="ft-block">原因判断
+            <textarea id="ftCause" rows="2" placeholder="定位到的根因或怀疑方向"></textarea>
+          </label>
+          <label class="ft-block">修复方案与结果
+            <textarea id="ftFix" rows="2" placeholder="如何修复、是否验证通过"></textarea>
+          </label>
+        </div>
+
+        <div class="ft-ai">
+          <h4>AI 分析 (协助排查)</h4>
+          <div class="ai-bar">
+            <span id="ftAiStatus" class="ai-status">AI: 未配置</span>
+            <button id="ftAiSettingsBtn">⚙ AI 设置</button>
+            <button id="ftAiRun">🤖 用 AI 分析当前故障</button>
+          </div>
+          <p class="dt-note">🔒 AI 使用全局配置（「AI 设置」里配置一次，日志分析与故障速查共用）；分析结果会写入下方文本框并随记录一并保存。</p>
+          <textarea id="ftAiReport" class="ft-ai-report" rows="10" placeholder="AI 分析结果将显示在这里，可编辑后点击「保存」写入记录"></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <div class="footer-left">
+      <span>模式: <strong id="flightMode">--</strong></span>
+      <span>GPS: <strong id="gpsCount">--</strong></span>
+      <span>负载: <strong id="loadPercent">--</strong>%</span>
+    </div>
+    <div class="footer-right">
+      <button id="btnBackup" title="前往备份恢复">备份参数</button>
+      <button id="btnRestore" title="前往备份恢复">恢复参数</button>
+    </div>
+  </footer>
+
+  <script src="onetouch_data.js"></script>
+  <script src="aiconfig.js"></script>
+  <script src="app.js"></script>
+  <script src="onetouch.js"></script>
+  <script src="charts.js"></script>
+  <script src="datatools.js"></script>
+  <script src="fault.js"></script>
+</body>
+</html>
