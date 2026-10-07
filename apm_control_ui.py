@@ -777,11 +777,7 @@ class AmpUI(object):
         ttk.Label(top, text='起飞高度m:').pack(side='left')
         self.var_toff = tk.StringVar(value=str(tct.TAKEOFF_ALT))
         ttk.Entry(top, textvariable=self.var_toff, width=5).pack(side='left')
-        # v1.24.4: 起飞爬升油门 (ALT_HOLD 油门爬升用, 1600~2000)
-        ttk.Label(top, text='起飞油门:').pack(side='left', padx=(6, 0))
-        self.var_takeoff_thr = tk.StringVar(value=str(tct.TAKEOFF_CLIMB_THR))
-        ttk.Entry(top, textvariable=self.var_takeoff_thr, width=5
-                  ).pack(side='left')
+        # v1.31: 爬升杆位不再由用户填写(闭环自适应, 见 tct.takeoff_althold)
         ttk.Label(top, text='低空起降m:').pack(side='left', padx=(6, 0))
         self.var_bounce = tk.StringVar(value=str(tct.BOUNCE_ALT))
         ttk.Entry(top, textvariable=self.var_bounce, width=5).pack(side='left')
@@ -791,9 +787,11 @@ class AmpUI(object):
         ttk.Label(top, text='时长s:').pack(side='left', padx=(6, 0))
         self.var_dur = tk.StringVar(value=str(tct.TEST_DURATION))
         ttk.Entry(top, textvariable=self.var_dur, width=4).pack(side='left')
-        # v1.24.5: 一次性写入发射箱参数按钮
+        # v1.30: 参数写入唯一入口 — 系统起飞/解锁不再自动写任何飞控参数
         ttk.Button(top, text='写入发射箱参数',
                    command=self.on_write_launch_params).pack(side='left', padx=(8, 0))
+        ttk.Label(top, text='(参数只由本按钮/参数页手动写, 系统不自动写)',
+                  style='Gray.TLabel').pack(side='left', padx=(4, 0))
 
         # ===== 安全条: 急停 + 围栏/电池/心跳状态 =====
         bar = ttk.Frame(self.root, padding=(4, 2))
@@ -1235,16 +1233,9 @@ class AmpUI(object):
             tct.BOUNCE_ALT = float(self.var_bounce.get())
             tct.TEST_SPEED = float(self.var_speed.get())
             tct.TEST_DURATION = float(self.var_dur.get())
-            thr_i = int(float(self.var_takeoff_thr.get()))
         except ValueError:
             self._log_line('⚠️ 参数格式错误, 保持原值')
             return False
-        # v1.24.4: 起飞油门钳制 1600~2000 (1500=悬停, 低于1600近死区飞不起来)
-        if not (1600 <= thr_i <= 2000):
-            self._log_line('⚠️ 起飞油门 %s 超出 1600~2000, 已限制' % thr_i)
-            thr_i = max(1600, min(2000, thr_i))
-            self.var_takeoff_thr.set(str(thr_i))
-        tct.TAKEOFF_CLIMB_THR = thr_i
         return True
 
     def on_refresh_ports(self):
@@ -2383,8 +2374,9 @@ class AmpUI(object):
         ttk.Button(gp, text='仅飞往(GUIDED)',
                    command=lambda: self.on_goto_point(need_takeoff=False)
                    ).pack(side='left', padx=2)
-        ttk.Label(f, text='巡航m/s 留空=不改飞控参数 (范围 0.2~20; '
-                          '固件 WPNAV_SPEED 上限 2000cm/s=20m/s)',
+        ttk.Label(f, text='巡航m/s 留空=按飞控现有 WPNAV_SPEED; 填写=发 '
+                          'DO_CHANGE_SPEED 指令调速(只对本次飞行生效, 不写参数; '
+                          '范围 0.2~20)',
                   style='Gray.TLabel').pack(anchor='w', pady=(3, 0))
         ttk.Label(f, text='目的地由用户自行填写 GPS 数据: '
                           '纬度,经度 或 @东x,北y(相对飞机GPS), 高度填在右侧高度m',
@@ -2587,18 +2579,19 @@ class AmpUI(object):
             self._log_line('❌ 交还遥控器失败: %s' % e)
 
     def on_write_launch_params(self):
-        """v1.24.5: 手动一次性写入发射箱参数 + DISARM_DELAY"""
+        """v1.30: 唯一的参数写入口 — 用户显式点击才写飞控参数"""
         p = self._need_proxy()
         if not p:
             return
         self._enqueue('写入发射箱参数', lambda: self._do_write_launch_params(p))
 
     def _do_write_launch_params(self, master):
-        """实际执行写入：不检查标记，写完后设置标记"""
+        """实际执行写入：每次点击都写(只写与期望值不符的项)"""
         print("  🔧 手动写入发射箱参数 + DISARM_DELAY...")
         tct.write_launch_params(master)
         tct.write_disarm_delay(master)
-        print("  ✅ 发射箱参数与 DISARM_DELAY 手动写入完成，后续操作将自动跳过")
+        print("  ✅ 发射箱参数与 DISARM_DELAY 手动写入完成; "
+              "系统后续只做飞行控制, 不再自动写任何参数")
 
     def on_set_home(self):
         with self.tel_lock:
@@ -2850,8 +2843,9 @@ class AmpUI(object):
             pass
 
     def on_rc_toggle(self):
-        """启用 = 先排队参数准备(RC_OVERRIDE_TIME=-1/RC_OPTIONS=0),
-        worker 完成回调后才真正打开 (gen 作废防止停用后被旧任务重开)"""
+        """启用 = 只读校验软遥控所需参数(RC_OVERRIDE_TIME=-1/RC_OPTIONS=0),
+        worker 完成回调后才真正打开 (gen 作废防止停用后被旧任务重开).
+        v1.30: 系统不写参数 — 不符时提示用户先点[写入发射箱参数]再启用"""
         if self.var_rc_on.get():
             self.var_rc_on.set(False)
             if not self.connected:
@@ -2867,8 +2861,12 @@ class AmpUI(object):
             p = self.proxy
 
             def fn():
-                ok1 = tct.ensure_param(p, 'RC_OVERRIDE_TIME', -1)
-                ok2 = tct.ensure_param(p, 'RC_OPTIONS', 0)
+                v1 = tct.get_param(p, 'RC_OVERRIDE_TIME', timeout=2.0)
+                v2 = tct.get_param(p, 'RC_OPTIONS', timeout=2.0)
+                # RC_OVERRIDE_TIME: 0=禁用GCS覆盖(软遥控无效), -1=永不过期
+                # RC_OPTIONS bit1(值2)=忽略GCS覆盖
+                ok1 = v1 is not None and abs(v1) > 0.01
+                ok2 = v2 is not None and (int(v2) & 2) == 0
 
                 def fin():
                     if gen != self._rc_gen:
@@ -2880,12 +2878,20 @@ class AmpUI(object):
                         self.root.after(50, fin)
                         return
                     if not (ok1 and ok2):
-                        self.var_rc_st.set('参数准备失败, 未启用')
+                        self.var_rc_st.set('参数未就绪, 未启用')
                         self.var_rc_on.set(False)
                         self._log_line(
-                            '❌ 软遥控参数准备失败(RC_OVERRIDE_TIME/RC_OPTIONS), '
-                            '已取消启用')
+                            '❌ 软遥控参数不符(系统不自动写参数): '
+                            'RC_OVERRIDE_TIME=%s(需≠0, 建议-1) '
+                            'RC_OPTIONS=%s(bit1=2需为0); '
+                            '请先点[写入发射箱参数]再启用软遥控'
+                            % (('读不到' if v1 is None else '%g' % v1),
+                               ('读不到' if v2 is None else '%g' % v2)))
                         return
+                    if v1 is not None and abs(v1 - (-1.0)) >= 0.01:
+                        self._log_line(
+                            '⚠️ RC_OVERRIDE_TIME=%g (非-1), 覆盖会在超时后'
+                            '回落遥控器; 建议点[写入发射箱参数]改为 -1' % v1)
                     self.var_rc_on.set(True)
                     self._rc_grace_t = time.time() + 5
                     self.var_rc_st.set('启用中 (%dHz)' % tct.SOFT_RC_RATE_HZ)
@@ -2895,9 +2901,9 @@ class AmpUI(object):
                     self._start_soft_rc_loop()
                 self.root.after(0, fin)
                 return ok1 and ok2
-            self._enqueue('软遥控准备(参数)', fn)
-            self.var_rc_st.set('准备中(参数)...')
-            self._log_line('▶ 参数准备中, 完成后自动启用软遥控')
+            self._enqueue('软遥控参数校验(只读)', fn)
+            self.var_rc_st.set('校验中(参数)...')
+            self._log_line('▶ 只读校验软遥控参数, 通过后自动启用软遥控')
         else:
             self._rc_gen += 1          # 作废未完成的参数准备
             self._cancel_soft_rc_loop()
@@ -3769,12 +3775,14 @@ class AmpUI(object):
                     self._log_line('  已确保 GUIDED, 飞往目的地...')
                 self.target_alt = max(self.target_alt or 0.0, alt)
                 if spec['cruise_v'] > 0:
-                    print('  写入巡航速度 WPNAV_SPEED = %d cm/s (%.1f m/s) ...'
-                          % (int(round(spec['cruise_v'] * 100)), spec['cruise_v']))
-                    if not tct.set_param(p, 'WPNAV_SPEED', spec['cruise_v'] * 100.0,
-                                         timeout=2.5):
-                        print('  ⚠️ WPNAV_SPEED 写入失败, '
-                              '按飞控现有参数速度飞行')
+                    # v1.30: 不写 WPNAV_SPEED 参数, 改发 DO_CHANGE_SPEED 指令
+                    # (只对本次飞行生效, 重启/上锁后回到飞控参数值)
+                    print('  巡航速度 %.1f m/s: 发 DO_CHANGE_SPEED 指令 '
+                          '(不写飞控参数)...' % spec['cruise_v'])
+                    if not tct.send_change_speed(p, spec['cruise_v'],
+                                                 timeout=2.5):
+                        print('  ⚠️ 速度指令未被接受, 按飞控现有 WPNAV_SPEED '
+                              '速度飞行; 需永久生效请在参数页手动写入')
                 # 进入 goto 循环
                 pos0 = self._fresh_pos(p) or (lat, lon, alt)
                 d0 = _haversine(pos0[0], pos0[1], lat, lon)

@@ -67,7 +67,7 @@ DEG2RAD = math.pi / 180.0
 EARTH_RADIUS = 6371000.0
 
 # 解锁后未起飞被自动上锁的参数: DISARM_DELAY(秒), 默认约10s
-# 0=不改飞控参数; 起飞前写入, 避免 arm 后未及时 takeoff 被 DISARM
+# 0=不涉及; v1.30 起系统不自动写该参数, 仅提示, 由界面[写入发射箱参数]手动写
 DISARM_DELAY_SEC = 60
 
 # v1.21 发射箱: "到不了目标/悬停无指令"时的策略
@@ -192,14 +192,12 @@ def set_param(master, name, value, timeout=3.0):
 
 
 def ensure_disarm_delay(master):
-    """起飞前延长 DISARM_DELAY, 防止解锁后未起飞被自动上锁.
-    DISARM_DELAY_SEC<=0 则跳过. 失败仅警告不退出."""
+    """解锁/起飞前不再写 DISARM_DELAY (v1.30: 系统只做飞行控制, 参数写入
+    由用户在界面点[写入发射箱参数]手动触发). 这里只打印提示, 不发参数指令."""
     if not DISARM_DELAY_SEC or DISARM_DELAY_SEC <= 0:
         return
-    print('设置 DISARM_DELAY=%ds (防止解锁后未起飞自动上锁)...' % DISARM_DELAY_SEC)
-    if not set_param(master, 'DISARM_DELAY', float(DISARM_DELAY_SEC), timeout=2.5):
-        print('警告: 写入 DISARM_DELAY 失败, 仍继续; '
-              '若仍自动上锁请在 Mission Planner 改 DISARM_DELAY')
+    print('提示: DISARM_DELAY=%ds 未写入(系统不自动写飞控参数), '
+          '需要时请在界面点[写入发射箱参数]' % DISARM_DELAY_SEC)
 
 
 def collect_status_text(master, duration=2.0):
@@ -220,7 +218,8 @@ def collect_status_text(master, duration=2.0):
 
 
 def arm(master):
-    """解锁 (ARM): 可选延长 DISARM_DELAY -> 发射箱参数预设(禁自动返航/降落) -> RC覆盖油门最低 -> 校验 ACK + ARMED + PreArm 文本"""
+    """解锁 (ARM): 发射箱参数/DISARM_DELAY 只提示不写入(v1.30, 写入由用户
+    手动触发) -> RC覆盖油门最低 -> 校验 ACK + ARMED + PreArm 文本"""
     ensure_disarm_delay(master)
     tct.ensure_launch_params(master)
 

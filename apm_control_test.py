@@ -12,14 +12,27 @@ CONNECTION_STRING = 'COM25'   # 按实际修改
 BAUD_RATE = 115200
 CONTROL_RATE = 10                    # 速度指令发送频率 Hz
 TAKEOFF_ALT = 5.0                    # 默认起飞高度（米）
-TAKEOFF_CLIMB_THR = 1800             # 起飞爬升油门(覆盖帧ch3): 1500=悬停,
-                                     # ±100死区内=零爬升需求(1600=死区边缘),
-                                     # 默认1800≈1.25m/s需求; UI可调 1600~2000
+# v1.31: 起飞爬升"目标杆位"固定内部默认(非用户输入) — 只是爬升快慢偏好,
+# 闭环会自动补偿死区, 故不再暴露给用户以免歧义. 需要更猛/更柔可改此常量.
+CLIMB_STICK_NOMINAL = 1800           # ALT_HOLD 爬升目标杆位(覆盖帧ch3, 非电机油门):
+                                     # 1500=悬停, ±THR_DZ死区内=零爬升(默认1600=死区边缘),
+                                     # 1800≈1.25m/s需求
 TEST_SPEED = 2.0                     # 测试速度（m/s）
 TEST_DURATION = 5                    # 每项测试持续时间（秒）
+# ============ v1.31 起飞爬升杆位闭环 (ALT_HOLD 降级起飞/测试4/14) ============
+# 杆位不是电机油门: ALT_HOLD 下固件把杆位换算成爬升率(封顶 PILOT_SPEED_UP),
+# 再由高度控制器输出油门; 故按"目标高度-当前高度"闭环调节即可自适应机型/死区,
+# 全程不写飞控参数. 目标杆位取内部默认 CLIMB_STICK_NOMINAL, 不是用户输入.
+CLIMB_STICK_BASE = 1650              # 接近目标/起点杆位 (默认THR_DZ=100→死区上沿1600, 留50)
+CLIMB_STICK_CEIL = 1950              # 无爬升自动补偿的硬上限 (低于2000避免满杆)
+CLIMB_RAMP_ERR = 2.5                 # 误差≥此值(m)用目标杆位; 以下线性回落到 BASE
+CLIMB_STALL_DT = 2.5                 # 判"无爬升"的观察窗口(秒)
+CLIMB_STALL_DALT = 0.1               # 窗口内升高少于此值(m)视为无爬升
+CLIMB_STALL_STEP = 50                # 每次无爬升补偿的杆位增量(μs)
 
 # ============ 发射箱参数写入控制 ============
-# v1.24.5: 用户可通过按钮一次性写入发射箱参数，后续操作自动跳过
+# v1.30: 系统全程不自动写飞控参数 — 写入只由用户点[写入发射箱参数]触发,
+#        这里的标记仅用于"是否已手动写过", 解锁/起飞路径只提示不写入
 LAUNCH_PARAMS_WRITTEN = False        # 标记是否已在本会话写入过发射箱参数
 DISARM_DELAY_WRITTEN = False         # 标记是否已写入 DISARM_DELAY
 
@@ -32,11 +45,13 @@ def reset_launch_params_flag():
 # ============ 解锁后自动上锁 / 起飞集成 ============
 # ArduCopter: 解锁后若一直低油门未起飞, DISARM_DELAY 秒后自动 DISARM
 # 这就是"测试2解锁→稍后再飞已上锁"、"RC解锁不推油门自己停"的原因
-DISARM_DELAY_SEC = 60                # 起飞前写入的 DISARM_DELAY(秒); 0=不改飞控参数
+DISARM_DELAY_SEC = 60                # [写入发射箱参数]按钮要写入的 DISARM_DELAY(秒);
+                                     # 0=不写; 系统不自动写, 仅在未写入时提示
 ARM_TO_TAKEOFF_MAX = 8               # 集成起飞时: 解锁成功后最多几秒内必须发出 NAV_TAKEOFF
 
 # ============ 发射箱纯软件飞行（v1.20 解锁 / v1.21 参数预设） ============
-LAUNCH_PRESET = 1                    # 1=解锁前自动写"发射箱参数组"(禁飞控自动返航/降落)
+LAUNCH_PRESET = 1                    # 1=[写入发射箱参数]按钮包含该参数组(禁飞控自动返航/降落)
+                                     # 系统侧不再自动写, 只在未写入时提示用户手动写
 # (参数名, 期望值, 中文标签): 读回不符才写, 命中跳过; 单项失败仅警告继续
 LAUNCH_PARAMS = (
     ('FS_THR_ENABLE', 0.0, '无遥控器RC失效保护'),
@@ -221,31 +236,57 @@ def set_param(master, name, value, timeout=3.0):
     return False
 
 
-def ensure_disarm_delay(master):
-    """起飞相关测试前延长 DISARM_DELAY, 避免解锁后未及时起飞被自动上锁.
-    DISARM_DELAY_SEC=0 则跳过. v1.24.5: 用户已手动写入则跳过.
-    返回 True(已设置或跳过)/False(设置失败仍继续)"""
-    global DISARM_DELAY_WRITTEN
-    if not DISARM_DELAY_SEC or DISARM_DELAY_SEC <= 0:
-        return True
-    if DISARM_DELAY_WRITTEN:
-        print("  ℹ️ DISARM_DELAY 已手动写入，跳过")
-        return True
-    print(f"  设置 DISARM_DELAY={DISARM_DELAY_SEC}s (防止解锁后未起飞自动上锁)...")
-    if set_param(master, 'DISARM_DELAY', float(DISARM_DELAY_SEC), timeout=2.5):
-        return True
-    print("  ⚠️ 写入 DISARM_DELAY 失败(旧固件可能参数名不同), 仍继续; "
-          "若仍自动上锁请在 Mission Planner 全部参数中改 DISARM_DELAY")
+def send_change_speed(master, speed_ms, timeout=2.5):
+    """MAV_CMD_DO_CHANGE_SPEED: 用飞行指令(不是参数)调整本次飞行速度上限.
+    Copter 忽略 speed-type/throttle(param2=速度 m/s), 只对当前飞行生效,
+    不写飞控参数. 返回 True(ACK=ACCEPTED)/False"""
+    drain_rx(master)
+    master.mav.command_long_send(
+        master.target_system, master.target_component,
+        mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED, 0,
+        0, float(speed_ms), -1, 0, 0, 0, 0)
+    t_end = time.time() + timeout
+    while time.time() < t_end:
+        msg = master.recv_match(blocking=True,
+                                timeout=max(0.2, t_end - time.time()))
+        if msg is None:
+            return False
+        mtype = msg.get_type()
+        if mtype == 'COMMAND_ACK' and \
+                msg.command == mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED:
+            if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+                print(f"  ✅ 速度指令已接受: {speed_ms:g} m/s (不写参数)")
+                return True
+            print(f"  ⚠️ DO_CHANGE_SPEED 被拒(result={msg.result})")
+            return False
+        if mtype == 'STATUSTEXT':
+            text = msg.text
+            if isinstance(text, (bytes, bytearray)):
+                text = text.decode('utf-8', 'replace')
+            print(f"    [飞控] {text}")
+    print("  ⚠️ DO_CHANGE_SPEED 无 ACK(超时)")
     return False
 
 
-def write_disarm_delay(master):
-    """强制写入 DISARM_DELAY（按钮调用）：若已手动写入则提示跳过"""
-    global DISARM_DELAY_WRITTEN
+def ensure_disarm_delay(master):
+    """起飞/解锁前不再写 DISARM_DELAY (v1.30: 系统只做飞行控制, 参数写入
+    全部交由用户点[写入发射箱参数]手动触发).
+    这里不发任何参数指令, 只在本会话尚未手动写入时打印提示.
+    返回 True(恒真, 不阻断解锁)"""
     if not DISARM_DELAY_SEC or DISARM_DELAY_SEC <= 0:
         return True
     if DISARM_DELAY_WRITTEN:
-        print("  ℹ️ DISARM_DELAY 已手动写入，跳过")
+        return True
+    print("  ℹ️ DISARM_DELAY 未写入(系统不自动写飞控参数); "
+          "需延长解锁后自动上锁时间请点[写入发射箱参数]")
+    return True
+
+
+def write_disarm_delay(master):
+    """手动写入 DISARM_DELAY ([写入发射箱参数] 按钮调用): 用户显式点击即执行,
+    不因本会话已写过而跳过; 成功后置标记, 后续解锁/起飞只提示不写入"""
+    global DISARM_DELAY_WRITTEN
+    if not DISARM_DELAY_SEC or DISARM_DELAY_SEC <= 0:
         return True
     print(f"  🔧 手动设置 DISARM_DELAY={DISARM_DELAY_SEC}s...")
     if set_param(master, 'DISARM_DELAY', float(DISARM_DELAY_SEC), timeout=2.5):
@@ -324,20 +365,21 @@ def _do_launch_params(master):
 
 
 def ensure_launch_params(master):
-    """发射箱参数预设 - 若用户已手动写入则跳过 (v1.24.5)"""
-    global LAUNCH_PARAMS_WRITTEN
+    """解锁前不再写发射箱参数 (v1.30: 系统只做飞行控制, 不碰飞控参数).
+    这里不发任何参数指令, 只在本会话尚未手动写入时打印提示.
+    返回 True(恒真, 不阻断解锁)"""
     if LAUNCH_PARAMS_WRITTEN:
-        print("  ℹ️ 发射箱参数已手动写入，跳过")
         return True
-    return _do_launch_params(master)
+    if LAUNCH_PRESET:
+        print("  ℹ️ 发射箱参数未写入(系统不自动写飞控参数); "
+              "需要时请点[写入发射箱参数]")
+    return True
 
 
 def write_launch_params(master):
-    """强制写入发射箱参数（按钮调用）：若已手动写入则提示跳过"""
+    """手动写入发射箱参数（[写入发射箱参数] 按钮调用）: 用户显式点击即执行,
+    不因本会话已写过而跳过; 成功后置标记, 后续解锁/起飞只提示不写入"""
     global LAUNCH_PARAMS_WRITTEN
-    if LAUNCH_PARAMS_WRITTEN:
-        print("  ℹ️ 发射箱参数已手动写入，跳过")
-        return True
     print("  🔧 手动写入发射箱参数...")
     result = _do_launch_params(master)
     if result:
@@ -418,9 +460,10 @@ def print_motor_outputs(master, timeout=2.5):
 def arm_vehicle(master, mode='GUIDED', timeout=10, retries=ARM_RETRY,
                 fallback_mode='ALT_HOLD', gate=True):
     """在指定可解锁模式下解锁电机.
-    流程: 切模式 -> 发射箱参数预设(禁自动返航/降落, v1.21) -> RC覆盖强制
-    油门最低(解决脚本解锁时摇杆不在低位被拒) -> 发 ARM -> 校验 ACK +
-    心跳 ARMED; 被拒且原因为 GPS/EKF 未就绪时等就绪后自动重试 retries 次.
+    流程: 切模式 -> 发射箱参数只提示不写入(v1.30, 写入由用户手动触发) ->
+    RC覆盖强制油门最低(解决脚本解锁时摇杆不在低位被拒) -> 发 ARM ->
+    校验 ACK + 心跳 ARMED; 被拒且原因为 GPS/EKF 未就绪时等就绪后自动重试
+    retries 次.
     v1.24.3: 始终无法就绪时经现场确认降级 fallback_mode(默认 ALT_HOLD —
     气压定高不依赖位置估计, 且可油门起飞, 比 STABILIZE 更安全; 起飞流程
     会以油门爬升替代 NAV_TAKEOFF). v1.29.4: 该降级出口对"预检门禁超时"
@@ -474,6 +517,7 @@ def arm_vehicle(master, mode='GUIDED', timeout=10, retries=ARM_RETRY,
         print("  ℹ️ 电机已经是解锁状态")
         return True
 
+    # v1.30: 只提示是否已手动写入发射箱参数, 不发任何参数指令
     ensure_launch_params(master)
 
     thr = get_rc_throttle(master)
@@ -597,8 +641,9 @@ def arm_vehicle(master, mode='GUIDED', timeout=10, retries=ARM_RETRY,
     print("       到室外等 20~60s; 仍偏严可把 FS_EKF_THRESH 调到 1.0(Relaxed);")
     print("       急用/室内可点[定高解锁]走 ALT_HOLD(不依赖位置估计)")
     print("    2) 看上方 [飞控] PreArm: 具体原因 (GPS/EKF/罗盘/加速度计/安全开关)")
-    print("    3) 无遥控器纯软件控制: 解锁时已自动写 FS_THR_ENABLE=0 关闭"
-          "RC失效保护; 若报 Radio failsafe 需确认该参数为 0")
+    print("    3) 无遥控器纯软件控制: 系统不自动写参数, 需自行点"
+          "[写入发射箱参数] 写入 FS_THR_ENABLE=0 关闭RC失效保护; "
+          "若报 Radio failsafe 先确认该参数为 0")
     print("    4) 遥控器开机: 油门摇杆压到最低(约 1000)后再解锁")
     print("    5) Pixhawk 安全开关: 按一下物理按钮; 部分固件无"
           "BRD_SAFETYENABLE 参数属正常(跳过)")
@@ -622,9 +667,10 @@ def arm_and_takeoff(master, alt, mode='GUIDED', arm_timeout=10,
     已被 DISARM_DELAY 上锁".
     v1.24.3: 按解锁后的实际模式分派起飞方式 —
       GUIDED/AUTO → NAV_TAKEOFF (原路径);
-      ALT_HOLD(位置估计未就绪经确认降级) → 油门覆盖爬升(气压定高, 无需GPS),
+      ALT_HOLD(位置估计未就绪经确认降级) → 杆位闭环爬升(气压定高, 无需GPS),
         旧版无条件发 NAV_TAKEOFF 会被 STABILIZE/ALT_HOLD 忽略导致不解锁;
       其它(如 STABILIZE) → 中止并提示(手动模式不支持自动起飞).
+    set_delay=True: 仅提示 DISARM_DELAY 是否已手动写入, 不写参数(v1.30).
     返回 True/False"""
     if set_delay:
         ensure_disarm_delay(master)
@@ -644,7 +690,7 @@ def arm_and_takeoff(master, alt, mode='GUIDED', arm_timeout=10,
                             timeout=takeoff_timeout)
     if cur == 'ALT_HOLD':
         print(f"  [起飞] 实际模式 ALT_HOLD(位置估计未就绪已降级) → "
-              f"油门覆盖爬升至 {alt}m (气压定高, 无需GPS)...")
+              f"杆位闭环爬升至 {alt}m (气压定高, 无需GPS)...")
         ok = takeoff_althold(master, alt, timeout=max(takeoff_timeout, 90))
         if ok:
             print(f"  ✅ 已爬升至 {alt}m, 覆盖已交还(遥控器可直接接管)")
@@ -962,31 +1008,67 @@ def release_rc_override(master, handover=None):
 
 
 def takeoff_althold(master, alt, timeout=90, climb_thr=None):
-    """ALT_HOLD 下用 RC 油门覆盖爬升到 alt 米（默认通道: 1横滚/2俯仰/3油门/4偏航）。
-    到达后中油门稳定 2 秒再释放；无论成败退出前必定释放覆盖.
-    v1.24.4: climb_thr 缺省取 TAKEOFF_CLIMB_THR(UI 可调, 默认1800); 爬升段
-    全程发 climb_thr 直到到位 — 旧版到位前降 1600 正好是 ±100 死区边缘
-    (=零爬升需求): 低空目标(BOUNCE_ALT=2)从地面就发 1600 → 根本不离地,
-    5m 目标爬到 3m 后也卡死; 1500=悬停(稳定段用, 需求为零=保持高度)"""
+    """ALT_HOLD 下用 RC 杆位覆盖爬升到 alt 米（默认通道: 1横滚/2俯仰/3油门/4偏航）。
+    v1.31 闭环杆位 (不再发固定油门):
+      · 每拍按 err = alt - 当前高度 算杆位: err ≥ CLIMB_RAMP_ERR 用目标杆位,
+        以下线性回落到 CLIMB_STICK_BASE(死区上沿), 避免贴近目标时冲过头;
+      · 连续 CLIMB_STALL_DT 秒升高不足 CLIMB_STALL_DALT 且仍需爬升时,
+        杆位 +CLIMB_STALL_STEP 自动补偿, 直到 CLIMB_STICK_CEIL —
+        自适应 THR_DZ 死区偏大/机型偏重, 不依赖用户把值调准;
+      · 过冲回 1500(中位=保持高度).
+    climb_thr 缺省取内部常量 CLIMB_STICK_NOMINAL(默认1800)作为"目标杆位"
+    (可传 AUTOTUNE_CLIMB_THR 复用): 它不是电机油门, 固件把杆位换算成爬升率
+    (封顶 PILOT_SPEED_UP)后自己输出油门, 故只影响爬升快慢, 不影响能否起飞.
+    全程不写飞控参数. 到位后回中位稳定 2 秒再释放; 无论成败退出前必定释放覆盖.
+    返回 True(到位)/False(超时)"""
     if climb_thr is None:
-        climb_thr = TAKEOFF_CLIMB_THR
-    print(f"  ⬆️ ALT_HOLD 爬升至 {alt}m (油门 {climb_thr})...")
+        climb_thr = CLIMB_STICK_NOMINAL
+    nominal = max(min(float(climb_thr), float(CLIMB_STICK_CEIL)),
+                  float(CLIMB_STICK_BASE))
+    print(f"  ⬆️ ALT_HOLD 闭环爬升至 {alt}m (目标杆位 {int(nominal)}, "
+          f"无爬升补偿上限 {CLIMB_STICK_CEIL})...")
     t_end = time.time() + timeout
     rel = 0.0
+    stick = nominal
     reached = False
+    bump = 0                      # 无爬升累计补偿 (μs)
+    win_t0 = time.time()
+    win_rel = 0.0
+    last_rep = 0.0
     try:
         while time.time() < t_end:
-            p = master.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=0.2)
+            p = master.recv_match(type='GLOBAL_POSITION_INT', blocking=True,
+                                  timeout=0.2)
+            now = time.time()
             if p:
                 rel = p.relative_alt / 1000.0
                 if rel >= alt - 0.5:
                     reached = True
                     break
+                err = alt - rel
+                if err <= 0:
+                    stick = 1500                       # 已过冲: 中位保持高度
+                else:
+                    if now - win_t0 >= CLIMB_STALL_DT:
+                        if rel - win_rel < CLIMB_STALL_DALT:
+                            bump += CLIMB_STALL_STEP
+                            print(f"\n  ⏳ {CLIMB_STALL_DT:.0f}s 无明显爬升, "
+                                  f"杆位自动补偿 → {int(min(CLIMB_STICK_CEIL, nominal + bump))}")
+                        win_rel, win_t0 = rel, now
+                    ramp = (CLIMB_STICK_BASE +
+                            (nominal - CLIMB_STICK_BASE) *
+                            min(1.0, err / CLIMB_RAMP_ERR))
+                    stick = int(min(CLIMB_STICK_CEIL, ramp + bump))
+                if now - last_rep >= 1.0:
+                    last_rep = now
+                    print(f"  高度 {rel:.1f}m / 目标 {alt:.1f}m "
+                          f"杆位 {stick}", end='\r', flush=True)
             master.mav.rc_channels_override_send(
                 master.target_system, master.target_component,
-                1500, 1500, climb_thr, 1500, 0, 0, 0, 0
+                1500, 1500, stick, 1500, 0, 0, 0, 0
             )
         if reached:
+            print()
             for _ in range(10):
                 master.mav.rc_channels_override_send(
                     master.target_system, master.target_component,
@@ -994,6 +1076,9 @@ def takeoff_althold(master, alt, timeout=90, climb_thr=None):
                 )
                 time.sleep(0.2)
             print(f"  ✅ 已到达 {rel:.1f}m，已释放遥控器控制权")
+        else:
+            print(f"\n  ⚠️ 闭环爬升超时: 当前 {rel:.1f}m / 目标 {alt}m "
+                  f"(目标杆位 {int(nominal)} + 补偿 {bump})")
     finally:
         release_rc_override(master)
     return reached
