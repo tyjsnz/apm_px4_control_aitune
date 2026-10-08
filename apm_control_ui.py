@@ -96,6 +96,37 @@ CSV_HEADER = ['time', 'mode', 'armed', 'lat', 'lon', 'rel_alt', 'abs_alt',
               'rc_override', 'last_cmd', 'dist_home', 'target_alt',
               'target_speed', 'status_text']
 
+# ============ 发射箱参数说明 (v1.32: 点[写入发射箱参数]先弹说明确认页) ============
+# 键=参数名(对应 tct.LAUNCH_PARAMS 与 DISARM_DELAY), 值=写入前给操作员看的说明
+LAUNCH_PARAM_DOC = {
+    'FS_THR_ENABLE': '遥控器(油门)失控保护动作. 0=关闭, 信号丢失后保持当前模式'
+                     ' 不自动切模式/不自动降落; 1=RTL 返航, 2=Land 降落',
+    'FS_GCS_ENABLE': '地面站(GCS)心跳断链保护. 0=关闭, 断链后飞控不返航不降落,'
+                     ' 继续保持当前模式(由地面站/发射箱接管); 1=RTL, 2=SmartRTL',
+    'FS_DR_ENABLE': '惯导死亡推算(DR)失败保护. 0=关闭, 位置估计丢失时不自动'
+                    ' 返航/降落; 1=Land, 2=RTL, 3=SmartRTL或RTL',
+    'FS_DR_TIMEOUT': '惯导可用秒数: 超过后转入EKF失败保护(会降落). '
+                     '0=关闭该超时计时, 不因惯导超时结束当前动作',
+    'FS_EKF_ACTION': 'EKF(位置估计)失败动作. 0=不降落/不切模式, 只在地面站'
+                     ' 发告警; 非0则会自动降落或返航',
+    'FENCE_ENABLE': '飞控地理围栏失效保护开关. 0=围栏触发后飞控不自动动作;'
+                    ' 1=越界自动执行围栏动作(默认RTL/降落)',
+    'BRD_SAFETYENABLE': '硬件安全开关(机身红色安全按钮)是否必须按下才允许解锁.'
+                        ' 0=不要求, 发射箱/台架无安全开关时必须为0, '
+                        '否则 PreArm: Safety Switch',
+    'BATT_FS_LOW_ACT': '电池低电压故障保护动作. 0=仅蜂鸣/告警, 不自动降落;'
+                       ' 1=RTL, 2=Land',
+    'BATT_FS_CRT_ACT': '电池电量危急故障保护动作. 0=仅告警, 不自动降落; '
+                       '1=RTL, 2=Land',
+    'RC_OVERRIDE_TIME': '地面站RC覆盖(软遥控摇杆)超时秒数. -1=永不过期'
+                        '(无接收机的发射箱必须为-1, 否则停发摇杆几秒后覆盖失效);'
+                        ' 0=禁用RC覆盖; >0=超时后自动回退接收机',
+    'RC_OPTIONS': 'RC选项位. bit1(值2)=忽略地面站发来的RC覆盖 → 软遥控摇杆'
+                  '完全无效; 本组写0=不忽略, 使屏幕摇杆/软遥控生效',
+    'DISARM_DELAY': '解锁后一直未起飞自动上锁的秒数. 60=解锁后60秒未起飞'
+                    '自动DISARM(防止测试解锁后遗忘); 0=不自动上锁',
+}
+
 
 def _haversine(lat1, lon1, lat2, lon2):
     """两点球面距离(米)"""
@@ -605,6 +636,9 @@ class AmpUI(object):
         self.arm_confirm_auto = False   # True=跳过人工确认(冒烟/自动化)
         self._arm_dlg = None
         tct.ARM_CONFIRM_HOOK = self._arm_confirm
+        # v1.32: [写入发射箱参数] 说明确认页 (弹窗 + 回读当前值上下文)
+        self._launch_dlg = None
+        self._launch_dlg_ctx = None
 
         # 抛投
         self._drop_after_id = None
@@ -788,7 +822,8 @@ class AmpUI(object):
         self.var_dur = tk.StringVar(value=str(tct.TEST_DURATION))
         ttk.Entry(top, textvariable=self.var_dur, width=4).pack(side='left')
         # v1.30: 参数写入唯一入口 — 系统起飞/解锁不再自动写任何飞控参数
-        ttk.Button(top, text='写入发射箱参数',
+        # v1.32: 点击先弹[参数说明+确认]页, 页底确认后才真正写入
+        ttk.Button(top, text='写入发射箱参数…',
                    command=self.on_write_launch_params).pack(side='left', padx=(8, 0))
         ttk.Label(top, text='(参数只由本按钮/参数页手动写, 系统不自动写)',
                   style='Gray.TLabel').pack(side='left', padx=(4, 0))
@@ -2579,11 +2614,183 @@ class AmpUI(object):
             self._log_line('❌ 交还遥控器失败: %s' % e)
 
     def on_write_launch_params(self):
-        """v1.30: 唯一的参数写入口 — 用户显式点击才写飞控参数"""
+        """v1.30: 唯一的参数写入口; v1.32: 先弹[参数说明页], 操作员在页底点
+        [✅ 确认写入] 才真正写飞控参数 — 不确认则一个参数都不写"""
         p = self._need_proxy()
         if not p:
             return
-        self._enqueue('写入发射箱参数', lambda: self._do_write_launch_params(p))
+        self._open_launch_param_dialog(p)
+
+    def _launch_param_rows(self):
+        """说明页展示行 = tct.LAUNCH_PARAMS + DISARM_DELAY (顺序=写入顺序)"""
+        rows = [(str(n), float(v), str(lab))
+                for n, v, lab in getattr(tct, 'LAUNCH_PARAMS', ())]
+        dsec = float(getattr(tct, 'DISARM_DELAY_SEC', 0) or 0)
+        if dsec > 0:
+            rows.append(('DISARM_DELAY', dsec, '解锁后未起飞自动上锁秒数'))
+        return rows
+
+    def _open_launch_param_dialog(self, p):
+        """主线程: 打开说明确认页(置顶, 非模态), 并排队回读飞控当前值"""
+        win = self._launch_dlg
+        if win is not None:
+            try:
+                win.lift()
+                win.focus_force()
+            except Exception:
+                pass
+            return
+        rows = self._launch_param_rows()
+        if not rows:
+            self._log_line('⚠️ 没有可写入的发射箱参数(LAUNCH_PRESET=0?)')
+            return
+
+        win = tk.Toplevel(self.root)
+        self._launch_dlg = win
+        win.title('📋 写入发射箱参数 — 参数说明与确认')
+        try:
+            win.attributes('-topmost', True)
+        except Exception:
+            pass
+        win.geometry('940x600')
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill='both', expand=True)
+
+        ttk.Label(frm, text='即将写入飞控 %d 个参数 — 请逐项核对'
+                  % len(rows), font=('Microsoft YaHei', 13, 'bold')).pack(
+            anchor='w')
+        info = ('• 只有点下方 [✅ 确认写入] 才会写入; 直接关闭本页 = 不改任何参数。\n'
+                '• 写入时只写"飞控当前值 ≠ 目标值"的参数, 已一致的自动跳过。\n'
+                '• 参数写入立即生效并保存到飞控 EEPROM(掉电保留), 改回需手动重写。\n'
+                '• 本组参数面向发射箱/台架: 关闭机上自动保护(失联返航/降落/围栏/'
+                '低电降落), 改由地面站接管 — 请勿在带接收机的实飞机上使用。\n'
+                '• ⚠️ 风险: 关闭后飞机失去机上自动保护, 必须有人盯守地面站, '
+                '随时可用 [⛔ 急停] 悬停/降落。\n'
+                '• 打开本页会自动回读飞控当前值; 读不到的行显示 "--"(不影响确认)。')
+        ttk.Label(frm, text=info, foreground='#444', justify='left',
+                  wraplength=890).pack(anchor='w', pady=(6, 8))
+
+        cols = ('param', 'cur', 'target', 'act', 'desc')
+        box = ttk.Frame(frm)
+        box.pack(fill='both', expand=True)
+        tree = ttk.Treeview(box, columns=cols, show='headings', height=13)
+        for c, t, w in (('param', '参数名', 138), ('cur', '飞控当前值', 96),
+                        ('target', '目标值', 74), ('act', '动作', 148),
+                        ('desc', '说明', 440)):
+            tree.heading(c, text=t)
+            tree.column(c, width=w, anchor='w')
+        tree.tag_configure('need', foreground='#b00020')
+        tree.tag_configure('same', foreground='#0a7a28')
+        tree.tag_configure('wait', foreground='#888888')
+        vs = ttk.Scrollbar(box, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=vs.set)
+        vs.pack(side='right', fill='y')
+        tree.pack(side='left', fill='both', expand=True)
+
+        ctx = {'win': win, 'tree': tree, 'rows': {}, 'read': 0,
+               'total': len(rows), 'proxy': p}
+        for name, target, label in rows:
+            iid = tree.insert('', 'end', tags=('wait',), values=(
+                name, '读取中…', '%g' % target, '⏳ 回读中',
+                LAUNCH_PARAM_DOC.get(name, label)))
+            ctx['rows'][name] = (iid, target)
+        self._launch_dlg_ctx = ctx
+
+        bot = ttk.Frame(frm)
+        bot.pack(fill='x', pady=(8, 0))
+        status = ttk.Label(bot, text='⏳ 正在回读飞控当前值…', foreground='#666')
+        status.pack(side='left')
+        ctx['status'] = status
+
+        def close():
+            if self._launch_dlg is win:
+                self._launch_dlg = None
+                self._launch_dlg_ctx = None
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        def confirm():
+            if not self.connected or self.proxy is None:
+                self._log_line('❌ 已断开飞控, 取消写入参数')
+                close()
+                return
+            proxy = self.proxy
+            close()
+            self._log_line('✅ 已确认写入发射箱参数 (%d 项)' % len(rows))
+            self._enqueue('写入发射箱参数',
+                          lambda: self._do_write_launch_params(proxy))
+
+        btns = ttk.Frame(bot)
+        btns.pack(side='right')
+        ttk.Button(btns, text='⛔ 取消(不写入)',
+                   command=close).pack(side='right', padx=(8, 0))
+        ttk.Button(btns, text='✅ 确认写入',
+                   command=confirm).pack(side='right')
+        win.protocol('WM_DELETE_WINDOW', close)
+        try:
+            win.update_idletasks()
+            win.geometry('+%d+%d' % (
+                max(0, (win.winfo_screenwidth() - 940) // 2),
+                max(0, (win.winfo_screenheight() - 600) // 2)))
+        except Exception:
+            pass
+        # 回读走任务队列(与参数页一致), 不阻塞主线程
+        self._enqueue('回读发射箱参数当前值',
+                      lambda: self._read_launch_params(ctx, rows))
+
+    def _read_launch_params(self, ctx, rows):
+        """工作线程: 逐项回读飞控当前值; 说明页已关闭则提前停"""
+        for name, target, label in rows:
+            if self._launch_dlg_ctx is not ctx:
+                return None
+            try:
+                if not ctx['win'].winfo_exists():
+                    return None
+            except Exception:
+                return None
+            try:
+                cur = tct.get_param(ctx['proxy'], name, timeout=1.5)
+            except Exception:
+                cur = None
+            self.root.after(0, self._launch_param_apply, name, cur)
+            time.sleep(0.05)
+        return True
+
+    def _launch_param_apply(self, name, cur):
+        """主线程: 回读结果刷新说明页某一行 + 进度状态"""
+        ctx = self._launch_dlg_ctx
+        if ctx is None or name not in ctx['rows']:
+            return
+        iid, target = ctx['rows'][name]
+        if cur is None:
+            cur_txt, action, tag = '--', '固件无此参数/未响应(跳过)', 'wait'
+        elif abs(float(cur) - target) < 0.01:
+            cur_txt, action, tag = ('%g' % float(cur),
+                                    '✅ 已一致, 跳过不写', 'same')
+        else:
+            cur_txt, action, tag = '%g' % float(cur), '✏️ 将写入', 'need'
+        try:
+            desc = ctx['tree'].set(iid, 'desc')
+            ctx['tree'].item(iid, tags=(tag,), values=(
+                name, cur_txt, '%g' % target, action, desc))
+        except Exception:
+            return
+        ctx['read'] += 1
+        try:
+            if ctx['read'] >= ctx['total']:
+                ctx['status'].config(
+                    text='✅ 回读完成 %d/%d — 点 [✅ 确认写入] 开始写入'
+                         % (ctx['read'], ctx['total']),
+                    foreground='#0a7a28')
+            else:
+                ctx['status'].config(
+                    text='⏳ 正在回读飞控当前值 %d/%d …'
+                         % (ctx['read'], ctx['total']),
+                    foreground='#666')
+        except Exception:
+            pass
 
     def _do_write_launch_params(self, master):
         """实际执行写入：每次点击都写(只写与期望值不符的项)"""
