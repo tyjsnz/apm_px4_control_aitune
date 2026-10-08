@@ -219,13 +219,47 @@ GUIDED 与 AUTO 底层共用 WPNAV 导航层，第 1/2/3/5/6/8 阶段完全通�
 
 ### `PreArm: Need Position Estimate`
 
-飞控 EKF 尚未完成位置估计，**这是强制解锁检查，无法跳过**。处理方式：
+**判定链路（两道门，先确认卡在哪道）：**
 
-1. **室外**等 GPS 3D 定位 + EKF 收敛（通常 20~60s），看安全页的「位置就绪」行
-2. 确认 `AHRS_EKF_TYPE = 3`、`EK3_ENABLE = 1`（EKF3 已启用）
-3. 需要放宽时把 `FS_EKF_THRESH` 从 `0.6`（严格）调到 `0.8`（默认）或 `1.0`（宽松）
-   ——注意这会降低对位置估计质量的把关，请谨慎
-4. **急用可点「定高解锁」**走 `ALT_HOLD`，该模式不依赖位置估计（无法定点）
+| 门 | 位置 | 判据 |
+|---|---|---|
+| ① 本软件预检门禁 | `apm_control_test.py` `position_ready_state()` | GPS 3D 定位 + 卫星 ≥ `POS_READY_MIN_SATS`(6) + EKF 有**水平位(8\|16，或预测位 256\|512)** 与 **垂直位(32\|64)**；60s 不满足则不发 ARM（`ARM_PREPARE_WAIT`） |
+| ② 飞控强制检查 | `Copter::position_ok()` → "Need Position Estimate" | EKF 失效保护未触发 **且** 有水平绝对/预测位置 |
+
+飞控是最终裁判，② 跳不掉（`ARMING_SKIPCHK` 也跳不掉，且 GUIDED 本身需要位置）。调参只为让 EKF **尽快**满足判定，不是取消判定。
+
+**A. 让 EKF 尽早融合 GPS（治本，推荐先做）**
+
+| 参数 | 默认 | 建议 | 作用 |
+|---|---|---|---|
+| `EK3_GPS_CHECK` | 31 | 3（只查卫星+HDOP） | 预检位掩码 `0:卫星数 1:HDOP 2:速度误差 3:位置误差 4:航向误差 5:位置漂移 6:垂速 7:水平速`，调小=更早开始用 GPS |
+| `EK3_CHECK_SCALE` | 100% | 150~200 | GPS 精度/漂移门限缩放，200=允许误差翻倍 |
+| `EK3_POS_I_GATE` / `EK3_VEL_I_GATE` / `EK3_HGT_I_GATE` | 500 | 500~1000 | 创新检验门限(%σ)，调大更易通过 |
+| `AHRS_GPS_MINSATS` | 6 | 4~6 | 用 GPS 修正姿态/速度的最少卫星数 |
+| `GPS_HDOP_GOOD` | 140 | 220~250 | 预检 HDOP 门限（"High GPS HDOP"） |
+
+**B. 解锁 / EKF 失效门槛**
+
+| 参数 | 默认 | 建议 | 作用 |
+|---|---|---|---|
+| `FS_EKF_THRESH` | 0.8 | **1.0**(Relaxed)，0=关闭 | 官方说明 **"Used in arming check and EKF failsafe"**；置位后 `position_ok()` 直接 false |
+| `FS_EKF_FILT` | — | 调小 | 方差低通截止，越高越易被瞬时尖峰触发 |
+| `FS_EKF_ACTION` | 0 | 保持 0 | 触发后仅报告、不降落 |
+| `ARMING_CHECK` / `ARMING_SKIPCHK` | — | 4=跳过 GPS 普通预检 | **位置估计属 mandatory，跳不掉** |
+
+**C. 数据源配错 = 永不就绪**（PreArm 会提示 `Check EK3_SRCx_*`）：
+`AHRS_EKF_TYPE=3`、`EK3_ENABLE=1`、`EK3_SRC1_POSXY=3(GPS)`、`EK3_SRC1_VELXY=3(GPS)`、
+`EK3_SRC1_POSZ=1(Baro)`、`EK3_SRC1_VELZ=3(GPS)`、`EK3_SRC1_YAW=1(罗盘)/8(GSF)`；
+另查罗盘校准、`BARO_ALTERR_MAX`。
+
+**D. 调参无效的场景**：室内/GPS 多径时 EKF 恒定位模式，`flags=0x00A7`
+（有姿态/速度/垂直位置，**缺水平位置**）→ 只能室外/靠窗，或点「定高解锁」走
+`ALT_HOLD`（气压定高，不依赖位置估计，无法定点）。
+
+**E. 本软件侧旋钮**（`apm_control_test.py` 顶部常量，**顶栏同名输入框改完即生效**，
+无需重启，状态条/EKF监控/解锁门禁三处同步）：
+`POS_READY_MIN_SATS=6`（预检最少卫星数，调小更宽松）、`POS_EKF_MSG_GRACE=15`
+（无 EKF 报文多少秒后只看 GPS，0=立即降级）、`ARM_PREPARE_WAIT=60`（预检等待时长）。
 
 > `ANGLE_MAX` / `ATC_ANG_LIM_TC` / `WPNAV_ACCEL` / `WPNAV_JERK` 等姿态与
 > 导航调参**不参与解锁自检**，调它们无效。

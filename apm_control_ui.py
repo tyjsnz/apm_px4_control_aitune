@@ -821,6 +821,28 @@ class AmpUI(object):
         ttk.Label(top, text='时长s:').pack(side='left', padx=(6, 0))
         self.var_dur = tk.StringVar(value=str(tct.TEST_DURATION))
         ttk.Entry(top, textvariable=self.var_dur, width=4).pack(side='left')
+        # v1.33: EKF 预检门槛 (软件判据, 不是飞控参数) — 输入合法即写回
+        # tct.POS_READY_MIN_SATS / ARM_PREPARE_WAIT / POS_EKF_MSG_GRACE,
+        # 改 position_ready_state/wait_position_ready 默认值为运行时读全局后
+        # 状态条、EKF监控线程、解锁门禁三处立即同步生效
+        ttk.Separator(top, orient='vertical').pack(side='left', fill='y',
+                                                   padx=6, pady=2)
+        ttk.Label(top, text='预检卫星≥').pack(side='left')
+        self.var_pr_sats = tk.StringVar(value=str(tct.POS_READY_MIN_SATS))
+        ttk.Entry(top, textvariable=self.var_pr_sats, width=3).pack(
+            side='left')
+        ttk.Label(top, text='等待s:').pack(side='left', padx=(4, 0))
+        self.var_pr_wait = tk.StringVar(value=str(tct.ARM_PREPARE_WAIT))
+        ttk.Entry(top, textvariable=self.var_pr_wait, width=4).pack(
+            side='left')
+        ttk.Label(top, text='EKF宽限s:').pack(side='left', padx=(4, 0))
+        self.var_pr_grace = tk.StringVar(value=str(tct.POS_EKF_MSG_GRACE))
+        ttk.Entry(top, textvariable=self.var_pr_grace, width=3).pack(
+            side='left')
+        # 边改边生效 (quiet: 输入过程中不刷日志/不告警)
+        for _v in (self.var_pr_sats, self.var_pr_wait, self.var_pr_grace):
+            _v.trace_add('write',
+                         lambda *a: self._apply_ekf_knobs(quiet=True))
         # v1.30: 参数写入唯一入口 — 系统起飞/解锁不再自动写任何飞控参数
         # v1.32: 点击先弹[参数说明+确认]页, 页底确认后才真正写入
         ttk.Button(top, text='写入发射箱参数…',
@@ -1262,6 +1284,36 @@ class AmpUI(object):
 
     # ---------------- 连接 ----------------
 
+    def _apply_ekf_knobs(self, quiet=False):
+        """v1.33: 顶栏 EKF 预检门槛 → tct 全局 (动态生效, 不用重启程序).
+        范围: 卫星 1~30 / 预检等待 5~300s / 无EKF报文宽限 0~60s
+        (宽限 0 = 收不到 EKF_STATUS_REPORT 时立即降级只看 GPS).
+        输入无效则保持原值; 由 trace 调用时 quiet=True 不刷日志."""
+        try:
+            sats = int(str(self.var_pr_sats.get()).strip())
+            wait = int(str(self.var_pr_wait.get()).strip())
+            grace = int(str(self.var_pr_grace.get()).strip())
+        except (ValueError, tk.TclError):
+            if not quiet:
+                self._log_line('⚠️ 预检门槛须为整数, 保持原值')
+            return False
+        if not (1 <= sats <= 30) or not (5 <= wait <= 300) \
+                or not (0 <= grace <= 60):
+            if not quiet:
+                self._log_line('⚠️ 预检门槛超范围(卫星1~30/等待5~300s/'
+                               'EKF宽限0~60s), 保持原值')
+            return False
+        if tct.POS_READY_MIN_SATS == sats and tct.ARM_PREPARE_WAIT == wait \
+                and tct.POS_EKF_MSG_GRACE == grace:
+            return True
+        tct.POS_READY_MIN_SATS = sats
+        tct.ARM_PREPARE_WAIT = wait
+        tct.POS_EKF_MSG_GRACE = grace
+        if not quiet:
+            self._log_line('⚙️ 预检门槛已生效: 卫星≥%d / 等待%ds / '
+                           'EKF报文宽限%ds' % (sats, wait, grace))
+        return True
+
     def _apply_params(self):
         try:
             tct.TAKEOFF_ALT = float(self.var_toff.get())
@@ -1271,6 +1323,8 @@ class AmpUI(object):
         except ValueError:
             self._log_line('⚠️ 参数格式错误, 保持原值')
             return False
+        # v1.33: 预检门槛无效时仅告警并沿用原值, 不阻断动作
+        self._apply_ekf_knobs()
         return True
 
     def on_refresh_ports(self):

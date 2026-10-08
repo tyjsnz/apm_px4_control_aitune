@@ -71,6 +71,9 @@ ARM_RETRY_GPS_WAIT = 30              # 每次重试前等待GPS/EKF就绪的秒�
 # v1.29.3: 解锁前预检门禁 — 位置估计未就绪时先等(带进度), 到时仍未就绪则
 # 不发 ARM (避免必现的 PreArm: Need Position Estimate 弹窗)
 ARM_PREPARE_WAIT = 60
+# v1.33: 预检判据旋钮 (默认=旧硬编码值, 仅为可调)
+POS_READY_MIN_SATS = 6               # 解锁预检最少卫星数 (原借用 AUTOTUNE_MIN_SATS=6)
+POS_EKF_MSG_GRACE = 15               # 无 EKF_STATUS_REPORT 多少秒后降级只看 GPS
 # 需要水平位置估计才能解锁的模式 (不满足则跳过预检门禁, 如 ALT_HOLD/STABILIZE)
 POSITION_MODES = ('GUIDED', 'AUTO', 'LOITER', 'RTL', 'CIRCLE', 'SMARTRTL',
                   'LAND', 'BRAKE', 'FOLLOW', 'ZIGZAG', 'SYSTEMID', 'AUTOROTATE')
@@ -80,11 +83,14 @@ ARM_RETRY_KEYS = ('position estimate', 'need 3d fix', 'gps', 'ekf',
 # v1.24: EKF_STATUS_FLAGS 官方位定义 (pymavlink ardupilotmega dialect):
 #  1=ATTITUDE 2=VELOCITY_HORIZ 4=VELOCITY_VERT 8=POS_HORIZ_REL 16=POS_HORIZ_ABS
 #  32=POS_VERT_ABS 64=POS_VERT_AGL 128=CONST_POS_MODE(恒定位置=无有效位置)
+#  256=EKF_PRED_POS_HORIZ_REL 512=EKF_PRED_POS_HORIZ_ABS(预测水平)
+#  1024=UNINITIALIZED 32768=EKF_GPS_GLITCHING
 # 旧 0x0A 实为"速度水平|水平位置相对", 语义错误; 实机室内 flags=0x00A7:
 #  有姿态/速度/垂直位置, 但无水平位置 + CONST_POS_MODE → 正确判为未就绪
 EKF_POS_HORIZ_FLAGS = 0x18           # 水平位置: 相对(8) | 绝对(16) 任一
+EKF_PRED_POS_HORIZ_FLAGS = 0x300     # 预测水平位置: 相对(256) | 绝对(512) 任一
 EKF_POS_VERT_FLAGS = 0x60            # 垂直位置: 绝对(32) | 对地(64) 任一
-EKF_CONST_POS_FLAG = 0x80            # 恒定位置模式 → 位置估计无效
+EKF_CONST_POS_FLAG = 0x80            # 恒定位置模式 (仅作诊断文案, 不再单独否决)
 # v1.22: 重试就绪后不自动解锁 — 醒目提示+人工确认 (防测试人员贴近时机身突解锁)
 ARM_CONFIRM_TIMEOUT = 120            # 确认超时秒数 (超时未确认则取消解锁)
 
@@ -639,6 +645,8 @@ def arm_vehicle(master, mode='GUIDED', timeout=10, retries=ARM_RETRY,
           "须 GPS 3D 定位 + EKF 收敛; 解锁前软件会先预检等待(%ds), "
           "超时则不发 ARM" % ARM_PREPARE_WAIT)
     print("       到室外等 20~60s; 仍偏严可把 FS_EKF_THRESH 调到 1.0(Relaxed);")
+    print("       让 EKF 早融合GPS: EK3_GPS_CHECK=3(只查卫星+HDOP)、"
+          "EK3_CHECK_SCALE=200;")
     print("       急用/室内可点[定高解锁]走 ALT_HOLD(不依赖位置估计)")
     print("    2) 看上方 [飞控] PreArm: 具体原因 (GPS/EKF/罗盘/加速度计/安全开关)")
     print("    3) 无遥控器纯软件控制: 系统不自动写参数, 需自行点"
@@ -824,8 +832,13 @@ def send_zero_velocity(master, count=20):
         time.sleep(0.1)
 
 
-def wait_gps_lock(master, min_sats=AUTOTUNE_MIN_SATS, timeout=30):
+def wait_gps_lock(master, min_sats=None, timeout=None):
     """等待 GPS 3D 定位且卫星数足够（调参/Loiter 前置条件）"""
+    # v1.33: 默认值运行时取模块全局 (def 时求值会让 UI 动态改值不生效)
+    if min_sats is None:
+        min_sats = AUTOTUNE_MIN_SATS
+    if timeout is None:
+        timeout = 30
     print("⏳ 等待 GPS 锁星...")
     t_end = time.time() + timeout
     while time.time() < t_end:
@@ -838,18 +851,23 @@ def wait_gps_lock(master, min_sats=AUTOTUNE_MIN_SATS, timeout=30):
 
 
 def ekf_pos_ready(flags):
-    """v1.24: 按官方位定义判断 EKF 位置估计就绪 — 水平(相对8|绝对16)+
-    垂直(绝对32|对地64)均有效, 且不在恒定位置模式(128)"""
+    """v1.33: 对齐飞控 Copter::position_ok() 未解锁判据 — 水平(相对8|绝对16,
+    或预测相对256|预测绝对512) + 垂直(绝对32|对地64) 有效即通过.
+    不再单独否决恒定位(128): 该位存在时本就无水平位(室内实测 0xA7),
+    有水平位时飞控未解锁判据同样不查它."""
     f = int(flags)
-    return bool(f & EKF_POS_HORIZ_FLAGS) and bool(f & EKF_POS_VERT_FLAGS) \
-        and not (f & EKF_CONST_POS_FLAG)
+    return bool(f & (EKF_POS_HORIZ_FLAGS | EKF_PRED_POS_HORIZ_FLAGS)) \
+        and bool(f & EKF_POS_VERT_FLAGS)
 
 
-def wait_ekf_position(master, timeout=ARM_RETRY_GPS_WAIT):
+def wait_ekf_position(master, timeout=None):
     """等待 EKF 水平+垂直位置估计就绪 (EKF_STATUS_REPORT flags, v1.21/v1.24 修正).
     GPS 锁星后 EKF 设 origin/收敛仍需数秒~数十秒, 此前 ARM 报
     'Need Position Estimate'. 固件未流式发送该消息时末尾 5s 放行(兼容).
     返回 True(就绪/放行) False(超时未就绪)"""
+    # v1.33: timeout=None -> 运行时读 ARM_RETRY_GPS_WAIT (支持动态调整)
+    if timeout is None:
+        timeout = ARM_RETRY_GPS_WAIT
     print("⏳ 等待 EKF 位置估计就绪...")
     t_end = time.time() + timeout
     grace_at = t_end - 5.0               # 最后5秒仍无该消息 -> 按旧固件放行
@@ -871,13 +889,17 @@ def wait_ekf_position(master, timeout=ARM_RETRY_GPS_WAIT):
     return False
 
 
-def position_ready_state(fix, sats, flags, min_sats=AUTOTUNE_MIN_SATS,
+def position_ready_state(fix, sats, flags, min_sats=None,
                          require_ekf=True):
     """位置估计是否已就绪(可安全 GUIDED 解锁). 纯函数, 供 arm_vehicle 预检
     门禁与 GUI 状态条共用 (GUI 从共享遥测取参, 避免抢 recv_match).
     fix/sats/flags 可为 None(尚未收到对应消息).
     require_ekf=False: 固件未流式发送 EKF_STATUS_REPORT 时降级为只看 GPS.
+    min_sats=None: 运行时读 POS_READY_MIN_SATS (v1.33 支持 UI 动态调整;
+    若在 def 时绑定则 UI 改 tct.POS_READY_MIN_SATS 不生效).
     返回 (ready: bool, why: str) — why 为人话化缺项, 就绪时 '就绪'"""
+    if min_sats is None:
+        min_sats = POS_READY_MIN_SATS
     if fix is None:
         return False, '未收到GPS'
     if fix < 3:
@@ -892,24 +914,29 @@ def position_ready_state(fix, sats, flags, min_sats=AUTOTUNE_MIN_SATS,
         f = int(flags)
         # 室内实测 0x00A7: 有姿态/速度/垂直位置 + CONST_POS_MODE, 无水平位置
         # — 旧文案只说"无有效位置"易被误读成姿态问题, 这里点明真正缺项
-        if (f & EKF_CONST_POS_FLAG) and not (f & EKF_POS_HORIZ_FLAGS):
+        if (f & EKF_CONST_POS_FLAG) and not (f & (EKF_POS_HORIZ_FLAGS
+                                                  | EKF_PRED_POS_HORIZ_FLAGS)):
             return False, 'EKF无水平位置(恒定位,未融合GPS,flags=0x%04x)' % f
         return False, 'EKF无有效位置(flags=0x%04x)' % f
     return True, '就绪'
 
 
-def wait_position_ready(master, timeout=ARM_PREPARE_WAIT, poll=0.25):
+def wait_position_ready(master, timeout=None, poll=0.25):
     """解锁前预检门禁 (v1.29.3): 主动等待 GPS 3D 定位 + EKF 位置估计就绪.
     背景: 'PreArm: Need Position Estimate' 是飞控 mandatory 检查
     (AP_Arming_Copter::mandatory_position_checks -> copter.position_ok()),
     ARMING_SKIPCHK 跳不掉, 且 GUIDED 本身 requires_position, 只能等就绪;
     上电后 EKF 收敛需 20~60s, 此前盲发 ARM 必被拒.
+    timeout=None: 运行时读 ARM_PREPARE_WAIT (v1.33 支持 UI 动态调整).
     每 5s 打一行进度(带具体缺项). 返回 (ready: bool, why: str)"""
+    if timeout is None:
+        timeout = ARM_PREPARE_WAIT
     t0 = time.time()
     timeout = max(1.0, float(timeout))
     t_end = t0 + timeout
     # 超过此时限仍无 EKF_STATUS_REPORT -> 判定该固件不流式发送, 改只看 GPS
-    ekf_grace = t0 + min(15.0, max(5.0, timeout / 3.0))
+    ekf_grace = t0 + min(float(POS_EKF_MSG_GRACE),
+                         max(5.0, timeout / 3.0))
     fix = sats = flags = None
     no_ekf_msg = False
     last_report = -5.0
