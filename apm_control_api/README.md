@@ -12,6 +12,7 @@
 ## 启动
 
 ```bash
+# 在上级目录下启动，因为apm_control_api下app.py使用了相对引用。
 python -m apm_control_api                # 默认 0.0.0.0:8000
 python -m apm_control_api --port 8080
 python -m apm_control_api --reload       # 开发热更新
