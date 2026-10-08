@@ -778,16 +778,17 @@ def apply_external_target(st, msg):
     """处理地面站下发的 SET_POSITION_TARGET_GLOBAL_INT, 修正目标; 返回是否有变化"""
     if (msg.type_mask & 0b11) != 0:
         return False  # 未使用经纬度(如纯速度指令)
-    if msg.lat == 0 and msg.lon == 0:
+    if msg.lat_int == 0 and msg.lon_int == 0:
         return False
-    lat = msg.lat / 1e7
-    lon = msg.lon / 1e7
+    lat = msg.lat_int / 1e7
+    lon = msg.lon_int / 1e7
     if abs(lat - st.lat) < 1e-7 and abs(lon - st.lon) < 1e-7:
         return False  # 与当前目标一致(含自身回显), 忽略
     alt = None
     if (msg.type_mask & 0b100) == 0 and msg.alt:
-        if msg.frame in (mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                         mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT):
+        if msg.coordinate_frame in (
+                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT):
             alt = float(msg.alt)
     st.lat = lat
     st.lon = lon
