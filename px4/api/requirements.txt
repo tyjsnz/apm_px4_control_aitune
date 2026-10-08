@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2.5
+pymavlink>=2.4
+pyserial>=3.5
+httpx>=0.27

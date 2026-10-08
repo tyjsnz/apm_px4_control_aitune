@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PX4 功能测试 UI 界面 (apm_control_ui.py)
+PX4 功能测试 UI 界面 (apm_control_ui.py 的 PX4 版)
 
-功能与 apm_control_test.py 完全一致(测试1~14 + 运行全部), 另外提供:
+功能与 px4_control_test.py 完全一致(测试1~14 + 运行全部), 另外提供:
   基础:
   - 实时遥测: 模式/解锁/GPS/位置/速度/姿态/电池/RC/EKF/链路状态
   - 日志窗口: 测试与飞控 STATUSTEXT 输出实时显示
   - 控制信号: 最近 MAVLink 指令及发送频率
   - 快速控制: 模式切换/解锁/起飞/降落/RTL/锁定/速度微动/抛投
     (通道/触发PWM/回位PWM/保持ms, 二次确认; 空闲入队带ACK, 任务中直发)
-  - 参数面板: 连接串/波特率/起飞高度等, 与 apm_control_test 共享
+  - 参数面板: 连接串/波特率/起飞高度等, 与 px4_control_test 共享
   安全:
   - 急停: 一键 LOITER 悬停(快捷键F9) + 立即 RTL/LAND, 直发不排队
   - 地理围栏: 离HOME距离/相对高度限制, 越界告警可选自动RTL
@@ -26,13 +26,13 @@ PX4 功能测试 UI 界面 (apm_control_ui.py)
   - 目标跟踪曲线: 高度/地速 实际 vs 目标
   - 参数读写面板: 飞控参数读取/写入 + 历史
   - RC覆盖滑条: 4通道覆盖(仅地面调试, 任务运行时自动释放)
-  - 航点任务: 解析/上传/一键执行(复用 apm_control.py), 支持 DROP 行
+  - 航点任务: 解析/上传/一键执行(复用 px4_control.py), 支持 DROP 行
     自动抛投 (到航点后 DO_SET_SERVO + NAV_DELAY 保持 + 回位)
   - 测试报告导出
   - 遥测消息速率表
 
 依赖: pip install pymavlink   (tkinter 为 Python 自带)
-运行: python apm_control_ui.py
+运行: python px4/px4_control_ui.py
 """
 import json
 import collections
@@ -56,7 +56,10 @@ except ImportError:
 
 from pymavlink import mavutil
 
-import apm_control as apc
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)  # 允许 python px4/px4_control_ui.py 直接运行
+import px4_control as apc
 import px4_control_test as tct
 
 try:
@@ -516,7 +519,7 @@ def get_available_ports():
 class AmpUI(object):
     def __init__(self, root):
         self.root = root
-        root.title('PX4 功能测试 UI  (apm_control_test 图形版)')
+        root.title('PX4 功能测试 UI  (px4_control_test 图形版)')
         root.geometry('1360x980')
         root.minsize(1100, 700)
 
@@ -691,7 +694,7 @@ class AmpUI(object):
         ttk.Label(top, text='起飞高度m:').pack(side='left')
         self.var_toff = tk.StringVar(value=str(tct.TAKEOFF_ALT))
         ttk.Entry(top, textvariable=self.var_toff, width=5).pack(side='left')
-        # v1.24.4: 起飞爬升油门 (ALT_HOLD 油门爬升用, 1600~2000)
+        # v1.24.4: 起飞爬升油门 (ALTCTL 软着陆微调用, 1600~2000)
         ttk.Label(top, text='起飞油门:').pack(side='left', padx=(6, 0))
         self.var_takeoff_thr = tk.StringVar(value=str(tct.TAKEOFF_CLIMB_THR))
         ttk.Entry(top, textvariable=self.var_takeoff_thr, width=5
@@ -849,7 +852,7 @@ class AmpUI(object):
         b_arm.grid(row=0, column=0, padx=3, pady=3, sticky='ew')
         b_dis = ttk.Button(qc, text='锁定 DISARM', command=self.on_disarm)
         b_dis.grid(row=0, column=1, padx=3, pady=3, sticky='ew')
-        # v1.24: 定高(ALT_HOLD)解锁/上锁一键切换 (不依赖水平位置估计, 室内试用)
+        # v1.24: 定高(ALTCTL)解锁/上锁一键切换 (不依赖水平位置估计, 室内试用)
         b_alt = ttk.Button(qc, text='定高解锁/上锁',
                            command=self.on_arm_alt_hold)
         b_alt.grid(row=0, column=2, padx=3, pady=3, sticky='ew')
@@ -861,11 +864,12 @@ class AmpUI(object):
         b_rtl.grid(row=0, column=5, padx=3, pady=3, sticky='ew')
 
         ttk.Label(qc, text='模式:').grid(row=1, column=0, sticky='e', padx=3)
-        self.var_mode = tk.StringVar(value='GUIDED')
+        self.var_mode = tk.StringVar(value='POSCTL')
         self.cmb_mode = ttk.Combobox(qc, textvariable=self.var_mode, width=12,
-                                     values=('GUIDED', 'LOITER', 'ALT_HOLD',
-                                             'STABILIZE', 'RTL', 'LAND',
-                                             'POSHOLD', 'AUTOTUNE'),
+                                     values=('POSCTL', 'LOITER', 'ALTCTL',
+                                             'STABILIZED', 'RTL', 'LAND',
+                                             'MISSION', 'OFFBOARD',
+                                             'MANUAL'),
                                      state='disabled')
         self.cmb_mode.grid(row=1, column=1, sticky='w', padx=3)
         ttk.Button(qc, text='切换模式',
@@ -924,7 +928,7 @@ class AmpUI(object):
         self._build_tab_signals()
 
         # ---- 右: 测试项 (跨满两行) ----
-        right = ttk.LabelFrame(body, text='功能测试 (同 apm_control_test)',
+        right = ttk.LabelFrame(body, text='功能测试 (同 px4_control_test)',
                                padding=6)
         right.grid(row=0, column=2, rowspan=2, sticky='nsw', padx=(4, 0))
 
@@ -1274,6 +1278,7 @@ class AmpUI(object):
         self.var_rc_on.set(False)
         self.var_kb_on.set(False)
         self._release_rc_override()
+        apc.stop_offboard_stream()   # 断开前停 OFFBOARD 设定值流线程
         self.reader_running = False
         self.connected = False
         raw = self.raw
@@ -1408,14 +1413,8 @@ class AmpUI(object):
                 if msg.type == mavutil.mavlink.MAV_TYPE_GCS:
                     return
                 t['hb_t'] = time.time()
-                mm = {}
-                try:
-                    mm = self.raw.mode_mapping() or {}
-                except Exception:
-                    mm = {}
-                t['mode'] = next((n for n, i in mm.items()
-                                  if i == msg.custom_mode),
-                                 'MODE(%s)' % msg.custom_mode)
+                # PX4 custom_mode(main/sub mode) 直接反解为模式名
+                t['mode'] = apc.custom_mode_name(msg.custom_mode)
                 t['armed'] = bool(msg.base_mode &
                                   mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
                 t['sys_status'] = msg.system_status
@@ -1615,7 +1614,7 @@ class AmpUI(object):
 
         def fn():
             tct.ensure_disarm_delay(p)
-            return tct.arm_vehicle(p, mode='GUIDED', timeout=10)
+            return tct.arm_vehicle(p, mode='POSCTL', timeout=10)
         self._enqueue('解锁 ARM', fn)
 
     def on_disarm(self):
@@ -1632,8 +1631,8 @@ class AmpUI(object):
         self._enqueue('锁定 DISARM', fn)
 
     def on_arm_alt_hold(self):
-        """v1.24: 定高(ALT_HOLD)解锁/上锁一键切换 — 未解锁→切ALT_HOLD并解锁,
-        已解锁→上锁. ALT_HOLD 不要求水平位置估计, 室内(GPS多径)可用"""
+        """v1.24: 定高(ALTCTL)解锁/上锁一键切换 — 未解锁→切ALTCTL并解锁,
+        已解锁→上锁. ALTCTL 不要求水平位置估计, 室内(GPS多径)可用"""
         p = self._need_proxy()
         if not p:
             return
@@ -1645,9 +1644,9 @@ class AmpUI(object):
                 if ok:
                     tct.release_rc_override(p)
                 return ok
-            print('定高(ALT_HOLD)解锁: 不依赖水平位置估计')
+            print('定高(ALTCTL)解锁: 不依赖水平位置估计')
             tct.ensure_disarm_delay(p)
-            return tct.arm_vehicle(p, mode='ALT_HOLD', timeout=10)
+            return tct.arm_vehicle(p, mode='ALTCTL', timeout=10)
         self._enqueue('定高解锁/上锁', fn)
 
     def on_takeoff(self):
@@ -1660,7 +1659,7 @@ class AmpUI(object):
         self.target_alt = alt
 
         def fn():
-            ok = tct.arm_and_takeoff(p, alt, mode='GUIDED', arm_timeout=10,
+            ok = tct.arm_and_takeoff(p, alt, mode='POSCTL', arm_timeout=10,
                                      takeoff_timeout=45, set_delay=True)
             if not ok:
                 self.target_alt = None
@@ -2132,14 +2131,16 @@ class AmpUI(object):
         row = ttk.Frame(f)
         row.pack(fill='x')
         ttk.Label(row, text='参数名:').pack(side='left')
-        self.var_param_name = tk.StringVar(value='PILOT_SPEED_UP')
+        self.var_param_name = tk.StringVar(value='MPC_XY_VEL_MAX')
         ttk.Combobox(row, textvariable=self.var_param_name, width=26,
-                     values=('PILOT_SPEED_UP', 'WPNAV_SPEED',
-                             'WPNAV_SPEED_UP', 'WPNAV_SPEED_DN',
-                             'ANGLE_MAX', 'FENCE_RADIUS', 'FENCE_ALT_MAX',
-                             'FENCE_ACTION', 'BATT_LOW_VOLT', 'BATT_LOW_MAH',
-                             'DISARM_DELAY', 'RTL_ALT', 'LAND_SPEED',
-                             'THROTTLE_HOVER', 'SERVO10_FUNCTION')).pack(
+                     values=('MPC_XY_VEL_MAX', 'MPC_Z_VEL_MAX_UP',
+                             'MPC_Z_VEL_MAX_DN', 'MPC_TKO_SPEED',
+                             'MPC_ACC_RAD', 'MIS_TAKEOFF_ALT',
+                             'COM_DISARM_PRFLT', 'COM_DISARM_LAND',
+                             'COM_RCL_EXCEPT', 'COM_LOW_BAT_ACT',
+                             'NAV_DLL_ACT', 'COM_OBL_RC_ACT',
+                             'BAT_LOW_THR', 'RTL_RETURN_ALT',
+                             'RC_MAP_MODE_SW')).pack(
             side='left', padx=4)
         ttk.Label(row, text='值:').pack(side='left', padx=(8, 0))
         self.var_param_val = tk.StringVar(value='0')
@@ -2158,7 +2159,7 @@ class AmpUI(object):
             self.param_tree.column(c, width=w, anchor='w')
         self.param_tree.pack(fill='both', expand=True, pady=6)
         ttk.Label(f, text='提示: 写入立即生效并存入飞控EEPROM, 注意参数取值范围; '
-                          '抛投前提 SERVO10_FUNCTION=0 (Disabled)',
+                          '抛投前提: 对应通道输出未被占用(PX4 function=0/Manual)',
                   style='Gray.TLabel').pack(anchor='w')
 
     def _build_tab_mission(self):
@@ -2170,7 +2171,7 @@ class AmpUI(object):
                    command=self.on_wp_check).pack(side='right', padx=2)
         ttk.Button(btnrow, text='仅上传', width=7,
                    command=self.on_wp_upload).pack(side='right', padx=2)
-        ttk.Button(btnrow, text='执行(解锁+起飞+AUTO)', width=18,
+        ttk.Button(btnrow, text='执行(解锁+起飞+MISSION)', width=20,
                    command=self.on_wp_run).pack(side='right', padx=2)
         ttk.Label(btnrow, text='航点任务操作',
                   style='Gray.TLabel').pack(side='left', padx=2)
@@ -2198,15 +2199,15 @@ class AmpUI(object):
                    command=lambda: self.on_goto_point(need_takeoff=False)
                    ).pack(side='left', padx=2)
         ttk.Label(f, text='巡航m/s 留空=不改飞控参数 (范围 0.2~20; '
-                          '固件 WPNAV_SPEED 上限 2000cm/s=20m/s)',
+                          '写入 MPC_XY_VEL_MAX 作为平移速度上限)',
                   style='Gray.TLabel').pack(anchor='w', pady=(3, 0))
         spr = ttk.Frame(f)
         spr.pack(fill='x', pady=(2, 0))
         ttk.Button(spr, text='读飞控速度参数', width=14,
                    command=self.on_speed_params_read).pack(side='left')
         self.var_speed_params = tk.StringVar(
-            value='飞控当前: WPNAV_SPEED=未读取  THROTTLE_HOVER=未读取 '
-                  '(悬停油门是全速潜力基准)')
+            value='飞控当前: MPC_XY_VEL_MAX=未读取  MPC_TKO_SPEED=未读取 '
+                  '(起飞爬升速度)')
         ttk.Label(spr, textvariable=self.var_speed_params,
                   style='Gray.TLabel').pack(side='left', padx=8)
         self.txt_wp = tk.Text(f, height=9, font=('Consolas', 10),
@@ -2337,7 +2338,7 @@ class AmpUI(object):
         """v1.24: 立即交还遥控器 — 发4通道全0帧撤销GCS RC覆盖,
         物理遥控器摇杆即刻生效 (RC_OVERRIDE_TIME=-1 下覆盖永不过期,
         不交还则接收机输入一直被屏蔽). 顺带停用软遥控防止20Hz回发覆盖.
-        注意: 摇杆生效还要求模式在手动档(GUIDED下摇杆无效→F9切LOITER)"""
+        注意: 摇杆生效还要求模式在手动档(OFFBOARD/自动档下摇杆无效→F9切LOITER)"""
         if not self.connected or self.raw is None:
             self._log_line('❌ 未连接, 无法交还遥控器')
             return
@@ -2353,7 +2354,7 @@ class AmpUI(object):
             tct.release_rc_override(self.raw, handover=True)
             self.var_rc_st.set('已交还物理遥控器')
             self._log_line('✅ RC覆盖已交还: 物理遥控器摇杆即刻生效 '
-                           '(手动模式下有效; GUIDED/自动档摇杆无效, '
+                           '(手动模式下有效; OFFBOARD/自动档摇杆无效, '
                            '可按 F9 切 LOITER 接管)')
         except Exception as e:
             self._log_line('❌ 交还遥控器失败: %s' % e)
@@ -2966,8 +2967,8 @@ class AmpUI(object):
     # ---------------- 参数读写 ----------------
 
     def on_speed_params_read(self):
-        """读回 WPNAV_SPEED(巡航上限) + THROTTLE_HOVER(悬停油门)
-        显示当前飞控侧的真实巡航能力基准, 供填巡航m/s参考"""
+        """读回 MPC_XY_VEL_MAX(平移速度上限) + MPC_TKO_SPEED(起飞爬升速度)
+        显示当前飞控侧的速度能力基准, 供填巡航m/s参考 (PX4 单位 m/s)"""
         p = self._need_proxy()
         if not p:
             return
@@ -2987,28 +2988,26 @@ class AmpUI(object):
             return float(msg.param_value)
 
         def fn():
-            spd = _read('WPNAV_SPEED')
-            hov = _read('THROTTLE_HOVER')
+            spd = _read('MPC_XY_VEL_MAX')
+            tko = _read('MPC_TKO_SPEED')
 
             def show():
                 parts = []
                 if spd is not None:
-                    parts.append('巡航上限 WPNAV_SPEED=%.0f cm/s '
-                                 '(%.1f m/s)' % (spd, spd / 100.0))
+                    parts.append('平移速度上限 MPC_XY_VEL_MAX=%.1f m/s'
+                                 % spd)
                 else:
-                    parts.append('WPNAV_SPEED 无响应')
-                if hov is not None:
-                    parts.append('悬停油门 THROTTLE_HOVER=%s' % (
-                        ('%.0f%%' % hov) if hov <= 100
-                        else ('PWM %.0f' % hov)))
+                    parts.append('MPC_XY_VEL_MAX 无响应')
+                if tko is not None:
+                    parts.append('起飞爬升 MPC_TKO_SPEED=%.1f m/s' % tko)
                 else:
-                    parts.append('THROTTLE_HOVER 无响应')
+                    parts.append('MPC_TKO_SPEED 无响应')
                 txt = '  |  '.join(parts)
                 self.var_speed_params.set(txt)
                 self._log_line('  ' + txt)
 
             self.root.after(0, show)
-            return spd is not None or hov is not None
+            return spd is not None or tko is not None
         self._enqueue('读速度参数', fn)
 
     def on_param_read(self):
@@ -3298,6 +3297,11 @@ class AmpUI(object):
                 print('  ❌ 起飞失败, 任务取消')
                 return False
             self.target_alt = takeoff_alt2
+            # PX4: 复位任务指针并切 MISSION(AUTO/MISSION) 开始执行
+            apc.reset_mission_to_start(p)
+            if not tct.set_flight_mode(p, 'MISSION'):
+                print('  ❌ 切 MISSION 模式失败, 任务取消')
+                return False
             return apc.wait_auto_mission(
                 p, n_items if isinstance(n_items, int) else len(items),
                 'rtl', timeout=60 + 30 * len(wps))
@@ -3306,12 +3310,12 @@ class AmpUI(object):
                       fn)
 
     def _hint_takeover(self):
-        self._log_line('ℹ️ GUIDED 下摇杆无效属正常; 接管: 按 F9 切 LOITER, '
+        self._log_line('ℹ️ OFFBOARD/自动档下摇杆无效属正常; 接管: 按 F9 切 LOITER, '
                        '或软遥控页[一键接管], 或拨 TX 模式开关')
 
     def on_goto_point(self, need_takeoff=True):
         """单点飞行: 目的地(纬度,经度 或 @东x,北y 相对飞机GPS) -> [解锁起飞]
-        -> GUIDED 飞往 -> 悬停. 反复发 goto(1Hz)直到水平<2.5m/垂直<1.5m"""
+        -> OFFBOARD 飞往 -> 悬停. 反复发 goto(1Hz)直到水平<2.5m/垂直<1.5m"""
         p = self._need_proxy()
         if not p:
             return
@@ -3356,7 +3360,7 @@ class AmpUI(object):
                 return
             if not (0.2 <= cruise_v <= 20.0):
                 self._log_line('❌ 巡航速度范围 0.2~20 m/s '
-                               '(对应 WPNAV_SPEED 20~2000 cm/s)')
+                               '(上限受 MPC_XY_VEL_MAX 限制)')
                 return
         else:
             cruise_v = 0.0
@@ -3380,7 +3384,7 @@ class AmpUI(object):
                     print('  ❌ 飞机未解锁, 请用"起飞并飞往"')
                     return False
                 to_alt = max(alt, tct.TAKEOFF_ALT)
-                if not tct.arm_and_takeoff(p, to_alt, mode='GUIDED',
+                if not tct.arm_and_takeoff(p, to_alt, mode='POSCTL',
                                            arm_timeout=10,
                                            takeoff_timeout=45,
                                            set_delay=True):
@@ -3389,15 +3393,16 @@ class AmpUI(object):
                 self.target_alt = to_alt
                 self._hint_takeover()
             else:
-                p.set_mode('GUIDED')
-                self._log_line('  已确保 GUIDED, 飞往目的地...')
+                if not apc.goto(p, lat, lon, alt):
+                    print('  ⚠️ 切 OFFBOARD 未确认, 循环中继续尝试')
+                self._log_line('  已设定 OFFBOARD 目标, 飞往目的地...')
             self.target_alt = max(self.target_alt or 0.0, alt)
             if cruise_v > 0:
-                print('  写入巡航速度 WPNAV_SPEED = %d cm/s (%.1f m/s) ...'
-                      % (int(round(cruise_v * 100)), cruise_v))
-                if not tct.set_param(p, 'WPNAV_SPEED', cruise_v * 100.0,
+                print('  写入平移速度上限 MPC_XY_VEL_MAX = %.1f m/s ...'
+                      % cruise_v)
+                if not tct.set_param(p, 'MPC_XY_VEL_MAX', cruise_v,
                                      timeout=2.5):
-                    print('  ⚠️ WPNAV_SPEED 写入失败, '
+                    print('  ⚠️ MPC_XY_VEL_MAX 写入失败, '
                           '按飞控现有参数速度飞行')
             pos0 = self._fresh_pos(p) or (lat, lon, alt)
             d0 = _haversine(pos0[0], pos0[1], lat, lon)
@@ -3421,7 +3426,7 @@ class AmpUI(object):
                     print('  ✅ 已到达目的地 (水平差 %.1fm)' % d)
                     self._hint_takeover()
                     return True
-            print('  ❌ 到达超时 (%.0fs), 飞机保持 GUIDED 悬停' % timeout)
+            print('  ❌ 到达超时 (%.0fs), 飞机保持 OFFBOARD 悬停' % timeout)
             self._hint_takeover()
             return False
         self._enqueue('单点飞行(目的地%s)' % ('相对' if rel else '绝对'),
@@ -3995,6 +4000,7 @@ class AmpUI(object):
         self._cancel_soft_rc_loop()
         self.var_rc_on.set(False)
         self._release_rc_override()
+        apc.stop_offboard_stream()   # 退出前停 OFFBOARD 设定值流线程
         self.reader_running = False
         self.connected = False
         raw = self.raw
