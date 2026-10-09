@@ -130,6 +130,8 @@ class Canvas(QWidget):
         self._draw_trails(p)
         self._draw_start_marks(p)
         self._draw_los(p)
+        for key in self.sim.active_keys:
+            self._draw_seeker(p, self.sim.missiles[key])
         self._draw_target(p)
         for key in self.sim.active_keys:
             self._draw_missile(p, self.sim.missiles[key])
@@ -228,9 +230,25 @@ class Canvas(QWidget):
         p.drawPath(tpath)
 
         # 导弹弹道(发光效果: 粗淡 + 细亮)
+        # 分段制导时: 截获前(中段)为暗色虚线, 截获后(末段)为亮色实线
+        phased = self.sim.cfg.phased
         for key in self.sim.active_keys:
             m = self.sim.missiles[key]
-            path = self._path(m.trail)
+            split = m.trail_split if phased else 0
+            if split >= 2:
+                pen = QPen(_qcolor(m.color, 110))
+                pen.setWidthF(1.7)
+                pen.setStyle(Qt.DashLine)
+                pen.setCapStyle(Qt.RoundCap)
+                pen.setJoinStyle(Qt.RoundJoin)
+                p.setPen(pen)
+                p.drawPath(self._path(m.trail[:split]))
+                pts = m.trail[split:]
+            else:
+                pts = m.trail
+            if len(pts) < 2:
+                continue
+            path = self._path(pts)
             pen = QPen(_qcolor(m.color, 60))
             pen.setWidthF(6.0)
             pen.setCapStyle(Qt.RoundCap)
@@ -279,6 +297,59 @@ class Canvas(QWidget):
                 self._text(p, QPointF(mx + nx, my + ny),
                            f"R={m.range / 1000:.2f} km",
                            _qcolor(m.color, 230), 11)
+
+    # -------------------------------------------------------------- 导引头 --
+    def _draw_seeker(self, p: QPainter, m):
+        """分段制导可视化: 未截获画视场锥+截获圆, 已截获画截获点标记."""
+        cfg = self.sim.cfg
+        if not cfg.phased:
+            return
+        c = self.w2s(m.x, m.y)
+        s, _, _, _ = self._view()
+
+        if not m.acquired:
+            # (a) 截获距离圆 R_acq: 进入这个圈才有机会截获
+            rr = cfg.acq_range * s
+            if rr >= 3.0:
+                pen = QPen(_qcolor(m.color, 70))
+                pen.setWidthF(1.0)
+                pen.setStyle(Qt.DashLine)
+                p.setPen(pen)
+                p.setBrush(Qt.NoBrush)
+                p.drawEllipse(c, rr, rr)
+
+            # (b) 视场锥: 相对弹轴 ±FOV/2 (屏幕 y 向下 -> 角度取负)
+            half = 0.5 * math.radians(cfg.acq_fov)
+            L = 78.0
+            p1 = QPointF(c.x() + L * math.cos(-m.heading - half),
+                         c.y() + L * math.sin(-m.heading - half))
+            p2 = QPointF(c.x() + L * math.cos(-m.heading + half),
+                         c.y() + L * math.sin(-m.heading + half))
+            tip = QPointF(c.x() + L * math.cos(-m.heading),
+                          c.y() + L * math.sin(-m.heading))
+            p.setPen(Qt.NoPen)
+            p.setBrush(_qcolor(m.color, 34))
+            p.drawPolygon(QPolygonF([c, p1, p2]))
+            pen = QPen(_qcolor(m.color, 150))
+            pen.setWidthF(1.0)
+            pen.setStyle(Qt.DotLine)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawLine(c, p1)
+            p.drawLine(c, p2)
+            self._text(p, QPointF(tip.x() - 24, tip.y() + 16),
+                       f"FOV {cfg.acq_fov:.0f}°", _qcolor(m.color, 140), 10)
+        elif m.acq_pos:
+            # (c) 截获点标记: × + 时刻/距离
+            a = self.w2s(*m.acq_pos)
+            pen = QPen(_qcolor(m.color, 210))
+            pen.setWidthF(1.5)
+            p.setPen(pen)
+            p.drawLine(QPointF(a.x() - 6, a.y() - 6), QPointF(a.x() + 6, a.y() + 6))
+            p.drawLine(QPointF(a.x() - 6, a.y() + 6), QPointF(a.x() + 6, a.y() - 6))
+            self._text(p, QPointF(a.x() + 9, a.y() + 4),
+                       f"截获 t={m.acq_t:.1f}s R={m.acq_r / 1000:.2f}km",
+                       _qcolor(m.color, 195), 10)
 
     # -------------------------------------------------------------- 目标 ----
     def _draw_target(self, p: QPainter):
@@ -367,7 +438,9 @@ class Canvas(QWidget):
             y0 = -22.0
         # 接近目标时改到图标左侧, 避免与目标标签叠在一起
         x0 = -112.0 if m.range < 900.0 else 24.0
-        self._text(p, c + QPointF(x0, y0), f"{m.name} {m.speed:.0f} m/s",
+        tag = f"  [{m.phase}]" if self.sim.cfg.phased else ""
+        self._text(p, c + QPointF(x0, y0),
+                   f"{m.name} {m.speed:.0f} m/s{tag}",
                    _qcolor(m.color, 250), 12, bold=True)
         self._text(p, c + QPointF(x0, y0 + 15),
                    f"n={m.overload_g:+.1f}g  λ̇={m.los_dot_dps:+.2f}°/s",
@@ -409,6 +482,8 @@ class Canvas(QWidget):
             items.append(("比例导引(PN)弹道", C_PN, False))
         if "pp" in self.sim.active_keys:
             items.append(("纯跟踪(PP)弹道", C_PP, False))
+        if self.sim.cfg.phased:
+            items.append(("中段弹道(虚线)·视场锥·截获圆", TXT, True))
 
         x, y = 14.0, 26.0
         p.setFont(_font(11))
@@ -507,8 +582,11 @@ class PlotWidget(QWidget):
                 rmax = max(rmax, max(m.hist_r))
         rmax = rmax if rmax > 0 else self.sim.cfg.field_size
         curves_r = [(m.color, m.name, m.hist_t, m.hist_r, m.range) for m in acts]
+        # 截获时刻竖线(分段制导)
+        vlines = [(m.acq_t, m.name, m.color) for m in acts
+                  if self.sim.cfg.phased and m.acquired]
         self._panel(p, top, "相对距离 R(t)", "m", curves_r, 0.0, rmax,
-                    self._fmt_m, show_x=False)
+                    self._fmt_m, show_x=False, vlines=vlines)
 
         # ---------- 下: 过载 ----------
         amax = self.sim.cfg.max_g * G0 * 1.15
@@ -521,7 +599,7 @@ class PlotWidget(QWidget):
                     hlines=[(-self.sim.cfg.max_g * G0, "−Gmax"),
                             (0.0, "0"),
                             (self.sim.cfg.max_g * G0, "+Gmax")],
-                    show_x=True)
+                    show_x=True, vlines=vlines)
         p.end()
 
     # ------------------------------------------------------------------
@@ -530,7 +608,7 @@ class PlotWidget(QWidget):
         return f"{v / 1000:.1f}k" if abs(v) >= 1000 else f"{v:.0f}"
 
     def _panel(self, p, rect, title, unit, curves, ymin, ymax, fmt,
-               hlines=None, show_x=False):
+               hlines=None, show_x=False, vlines=None):
         # 面板底
         p.setPen(Qt.NoPen)
         p.setBrush(QColor("#0d1526"))
@@ -573,6 +651,19 @@ class PlotWidget(QWidget):
                 p.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
                 p.setPen(_qcolor("#ff8080", 200))
                 p.drawText(QPointF(rect.right() - 42, y - 3), lab)
+
+        # 指定时刻竖线(如导引头截获时刻)
+        for i, (tmark, lab, color) in enumerate(vlines or []):
+            if 0.0 <= tmark <= tmax:
+                x = px(tmark)
+                vp = QPen(_qcolor(color, 120)); vp.setWidthF(1.0)
+                vp.setStyle(Qt.DashLine)
+                p.setPen(vp)
+                p.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+                p.setFont(_font(9))
+                p.setPen(_qcolor(color, 215))
+                p.drawText(QPointF(x + 3, rect.top() + 11 + 11 * (i % 2)),
+                           f"{lab}截获")
 
         # 时间刻度
         tstep = _nice_step(tmax, 6)

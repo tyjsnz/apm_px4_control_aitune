@@ -168,7 +168,7 @@ def main() -> int:
     check(h is not None and h.isVisible(), "点击帮助按钮打开文档窗口")
     n = h.listw.count()
     names = [h.listw.item(i).text() for i in range(n)]
-    check(n >= 5, f"docs 目录下 {n} 个 md 文档已载入: {names}")
+    check(n >= 6, f"docs 目录下 {n} 个 md 文档已载入: {names}")
     check(names and names[0] == "README", f"README 排在列表首位 ({names[:1]})")
     txt = h.browser.toPlainText()
     check("比例导引" in txt and "纯跟踪" in txt, "README 正文渲染成功")
@@ -194,6 +194,17 @@ def main() -> int:
     check("01_比例导引法PN" in h.status.text(), "点击文档链接切换到 01 文档")
     check("<pre" in h.browser.toHtml(), "围栏代码块已转换为 pre")
     check("<h2" in h.browser.toHtml(), "标题已转换为 h1~h6 标签")
+
+    # 新文档 05 的渲染
+    h._on_anchor(QUrl("05_中段制导与拦截点计算.md"))
+    QTest.qWait(200)
+    t5 = h.browser.toPlainText()
+    check("05_中段制导与拦截点计算" in h.status.text(), "点击链接跳转到 05 文档")
+    check("拦截点" in t5 and "路径规划" in t5 and "截获" in t5,
+          "05 文档正文渲染成功")
+    html5 = h.browser.toHtml()
+    check("<table" in html5 and "<pre" in html5 and "<h2" in html5,
+          "05 文档的表格/代码块/标题均已渲染")
 
     # 用户自行增删改 md -> 刷新后重新加载
     extra = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs",
@@ -239,6 +250,88 @@ def main() -> int:
     h.grab().save("preview_help.png")
     print("截图已保存: preview_help.png", flush=True)
     h.hide()
+
+    # 14) 分段制导(中段 -> 末段 + 导引头截获判据)
+    panel.cb_phased.setChecked(True)
+    cfg = win.sim.cfg                         # 注意: 默认参数按钮会整体替换 cfg 对象
+    check(cfg.phased, "启用分段制导写入 cfg")
+    check(panel.sp_acq.isEnabled() and panel.sp_fov.isEnabled()
+          and panel.mode_mid.isEnabled(), "启用后截获参数控件可用")
+    check(abs(cfg.acq_range - 4000.0) < 1e-9 and abs(cfg.acq_fov - 90.0) < 1e-9,
+          f"截获参数默认值 (R_acq={cfg.acq_range:.0f} m, FOV={cfg.acq_fov:.0f}°)")
+    pn = sim.missiles["pn"]
+    check(pn.phase == "中段" and not pn.acquired, "初始处于中段(导引头未截获)")
+    phase_row = next(i for i, (_, tag) in enumerate(panel.ROWS) if tag == "phase")
+    acq_row = next(i for i, (_, tag) in enumerate(panel.ROWS) if tag == "acq")
+    win._refresh()
+    check(panel.table.item(phase_row, 1).text() == "中段",
+          f"数据表显示制导阶段 ({panel.table.item(phase_row, 1).text()})")
+    check(panel.table.item(acq_row, 1).text() == "-",
+          "未截获时截获时刻显示 -")
+
+    # 中段方式 / 截获参数写入 cfg
+    panel.mode_mid.setCurrentIndex(1)
+    check(win.sim.cfg.mid_mode == "straight", "中段方式切换为程序直飞")
+    panel.mode_mid.setCurrentIndex(0)
+    panel.sp_acq.setValue(1500.0)
+    check(abs(win.sim.cfg.acq_range - 1500.0) < 1e-9,
+          f"截获距离写入 cfg ({win.sim.cfg.acq_range:.0f} m)")
+    panel.sp_fov.setValue(45.0)
+    check(abs(win.sim.cfg.acq_fov - 45.0) < 1e-9,
+          f"截获视场写入 cfg ({win.sim.cfg.acq_fov:.0f}°)")
+    panel.sp_acq.setValue(4000.0)
+    panel.sp_fov.setValue(90.0)
+    check(win.sim.cfg.mid_mode == "pip" and abs(win.sim.cfg.acq_fov - 90.0) < 1e-9,
+          "截获参数恢复默认")
+
+    # 跑到截获 -> 转入末段
+    pn = sim.missiles["pn"]                   # 每次改参数都会重建导弹对象
+    panel.btn_run.setChecked(True)
+    for _ in range(600):
+        QTest.qWait(20)
+        if pn.acquired or sim.finished:
+            break
+    check(pn.acquired, f"导引头截获 (t={pn.acq_t:.2f} s, R={pn.acq_r:.0f} m)")
+    check(pn.phase == "末段" and pn.acq_pos is not None, "截获后转入末段制导")
+    check(pn.trail_split >= 2, f"弹道按截获点分段 (split={pn.trail_split})")
+    win._refresh()
+    check(panel.table.item(phase_row, 1).text() == "末段", "数据表阶段更新为末段")
+    check(panel.table.item(acq_row, 1).text() == f"{pn.acq_t:.2f}",
+          f"数据表显示截获时刻 ({panel.table.item(acq_row, 1).text()})")
+
+    for _ in range(600):
+        QTest.qWait(20)
+        if sim.finished:
+            break
+    check(sim.finished and "未截获" not in sim.summary(),
+          f"截获后正常交战结束 ({sim.summary()[:70]})")
+
+    # 截获不了的情形: 程序直飞 + 视场 10°
+    panel.mode_mid.setCurrentIndex(1)
+    panel.sp_fov.setValue(10.0)
+    pn = sim.missiles["pn"]
+    check(not pn.acquired and pn.phase == "中段", "程序直飞+窄视场: 开局处于中段")
+    panel.btn_run.setChecked(True)
+    for _ in range(700):
+        QTest.qWait(20)
+        if sim.finished:
+            break
+    check(sim.finished and not pn.acquired, f"全程未截获 (飞行 {pn.t:.1f} s)")
+    check("未截获" in pn.result and "未截获" in sim.summary(),
+          f"结果附注导引头未截获 ({pn.result})")
+
+    # 关闭分段制导 -> 恢复"开机即末段"
+    panel.cb_phased.setChecked(False)
+    cfg = win.sim.cfg
+    check(not cfg.phased, "关闭分段制导写入 cfg")
+    check(not panel.sp_acq.isEnabled() and not panel.mode_mid.isEnabled(),
+          "关闭后其子控件置灰")
+    pn = sim.missiles["pn"]
+    check(pn.phase == "末段" and pn.acquired and pn.trail_split == 0,
+          "关闭后直接按末段制导运行")
+    win._refresh()
+    check(panel.table.item(phase_row, 1).text() == "末段",
+          "关闭分段制导后数据表阶段=末段")
 
     print("-" * 60)
     print("全部通过" if not FAILS else f"失败 {len(FAILS)} 项: {FAILS}",

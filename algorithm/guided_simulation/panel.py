@@ -49,6 +49,8 @@ class ControlPanel(QWidget):
         ("过载 a (m/s²)", "a"),
         ("过载 n (g)", "g"),
         ("弹速 Vm (m/s)", "v"),
+        ("制导阶段", "phase"),
+        ("截获时刻 (s)", "acq"),
         ("最小距离 (m)", "min"),
         ("结果", "res"),
     ]
@@ -141,6 +143,36 @@ class ControlPanel(QWidget):
         for w in (self.sp_vms, self.sp_g, self.sp_tau, self.sp_n, self.sp_k):
             w.valueChanged.connect(self._params)
         self.cb_vc.stateChanged.connect(self._params)
+        root.addWidget(g)
+
+        # ---------------- 导引头 / 分段制导 ----------------
+        g = QGroupBox("导引头 / 分段制导 (中段→末段)")
+        grid = QGridLayout(g)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
+        self.cb_phased = QCheckBox("启用分段制导\n(未截获=中段飞行, 截获后=末段寻的)")
+        grid.addWidget(self.cb_phased, 0, 0, 1, 2)
+        grid.addWidget(QLabel("中段方式"), 1, 0)
+        self.mode_mid = QComboBox()
+        self.mode_mid.addItem("指向预测拦截点 PIP", "pip")
+        self.mode_mid.addItem("程序直飞 (惯性)", "straight")
+        grid.addWidget(self.mode_mid, 1, 1)
+        grid.addWidget(QLabel("截获距离 R_acq"), 2, 0)
+        self.sp_acq = _spin(500, 15000, 4000, 100, 0, " m")
+        grid.addWidget(self.sp_acq, 2, 1)
+        grid.addWidget(QLabel("截获视场 FOV"), 3, 0)
+        self.sp_fov = _spin(10, 180, 90, 5, 0, " °")
+        grid.addWidget(self.sp_fov, 3, 1)
+        tip = QLabel("截获条件: R ≤ R_acq 且目标落在视场内(相对弹轴);\n"
+                     "未截获时按中段方式飞行, 截获后才转入 PN/PP。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#8fa8cc; font-size:11px;")
+        grid.addWidget(tip, 4, 0, 1, 2)
+        for w in (self.sp_acq, self.sp_fov):
+            w.valueChanged.connect(self._params)
+        self.mode_mid.currentIndexChanged.connect(self._params)
+        self.cb_phased.stateChanged.connect(self._on_phased)
+        self._apply_phased_ui()
         root.addWidget(g)
 
         # ---------------- 目标参数 ----------------
@@ -265,6 +297,16 @@ class ControlPanel(QWidget):
             return
         self.paramsChanged.emit()
 
+    def _apply_phased_ui(self):
+        """分段制导关闭时禁用其子控件(不发信号)."""
+        on = self.cb_phased.isChecked()
+        for w in (self.sp_acq, self.sp_fov, self.mode_mid):
+            w.setEnabled(on)
+
+    def _on_phased(self, *args):
+        self._apply_phased_ui()
+        self._params(*args)
+
     def _run_toggled(self, checked: bool):
         self.btn_run.setText("⏸ 暂停" if checked else "▶ 开始")
         self.runToggled.emit(checked)
@@ -288,7 +330,9 @@ class ControlPanel(QWidget):
         boxes = (self.sp_mx, self.sp_my, self.sp_tx, self.sp_ty,
                  self.sp_vms, self.sp_g, self.sp_tau, self.sp_n, self.sp_k,
                  self.sp_vt, self.sp_th, self.sp_turn, self.sp_per,
-                 self.sp_field, self.sp_hit, self.mode_box, self.mode_t, self.cb_vc)
+                 self.sp_field, self.sp_hit, self.mode_box, self.mode_t,
+                 self.cb_vc, self.cb_phased, self.mode_mid,
+                 self.sp_acq, self.sp_fov)
         for b in boxes:
             b.blockSignals(True)
         self.sp_mx.setValue(c.mx); self.sp_my.setValue(c.my)
@@ -302,8 +346,12 @@ class ControlPanel(QWidget):
         self.sp_turn.setValue(c.t_turn); self.sp_per.setValue(c.t_period)
         self.sp_field.setValue(c.field_size); self.sp_hit.setValue(c.hit_radius)
         self.mode_box.setCurrentIndex(max(0, self.mode_box.findData(c.mode)))
+        self.cb_phased.setChecked(c.phased)
+        self.sp_acq.setValue(c.acq_range); self.sp_fov.setValue(c.acq_fov)
+        self.mode_mid.setCurrentIndex(max(0, self.mode_mid.findData(c.mid_mode)))
         for b in boxes:
             b.blockSignals(False)
+        self._apply_phased_ui()          # 复选框状态变了, 同步子控件可用性
 
     def write_cfg(self):
         """把控件值写入 cfg(由 MainWindow 在 paramsChanged 时调用)."""
@@ -324,6 +372,10 @@ class ControlPanel(QWidget):
         c.t_period = self.sp_per.value()
         c.field_size = self.sp_field.value()
         c.hit_radius = self.sp_hit.value()
+        c.phased = self.cb_phased.isChecked()
+        c.acq_range = self.sp_acq.value()
+        c.acq_fov = self.sp_fov.value()
+        c.mid_mode = self.mode_mid.currentData()
 
     def set_positions(self, kind, x, y):
         """外部(画布拖拽)更新位置 spinbox."""
@@ -373,6 +425,9 @@ class ControlPanel(QWidget):
             "a": f"{m.a:+.1f}",
             "g": f"{m.overload_g:+.2f}",
             "v": f"{m.speed:.0f}",
+            "phase": m.phase,
+            "acq": (f"{m.acq_t:.2f}"
+                    if (m.params.phased and m.acquired) else "-"),
             "min": f"{mn:,.1f}" if math.isfinite(m.min_range) else "-",
             "res": m.result,
         }

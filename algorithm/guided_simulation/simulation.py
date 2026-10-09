@@ -44,6 +44,12 @@ class SimConfig:
     t_turn: float = 6.0             # 转弯率 / 正弦幅度 (deg/s)
     t_period: float = 4.0           # 正弦机动周期 (s)
 
+    # ---- 分段制导: 中段(未截获) -> 末段(已截获) ----
+    phased: bool = False            # 启用中段+末段分段制导
+    acq_range: float = 4000.0       # 导引头截获距离 R_acq (m)
+    acq_fov: float = 90.0           # 导引头截获视场 FOV (全角, deg)
+    mid_mode: str = "pip"           # 中段: "pip" 预测拦截点 | "straight" 程序直飞
+
     # ---- 命中判定 ----
     hit_radius: float = 25.0        # 战斗部有效杀伤半径 (m)
 
@@ -70,7 +76,9 @@ class Simulation:
         self.target = Target(c.tx, c.ty, c.t_heading, c.t_speed,
                              c.t_mode, c.t_turn, c.t_period)
         params = MissileParams(nav_ratio=c.nav_ratio, pp_gain=c.pp_gain,
-                               max_g=c.max_g, tau=c.tau, use_vc=c.use_vc)
+                               max_g=c.max_g, tau=c.tau, use_vc=c.use_vc,
+                               phased=c.phased, acq_range=c.acq_range,
+                               acq_fov=c.acq_fov, mid_mode=c.mid_mode)
         self.missiles = {
             "pn": Missile("pn", "比例导引", "#ff9f43",
                           c.mx, c.my, c.m_heading, c.m_speed, params),
@@ -145,8 +153,12 @@ class Simulation:
     @staticmethod
     def _result(m, why: str) -> str:
         if m.hit:
-            return f"命中 (脱靶量 {m.min_range:.1f} m)"
-        return f"脱靶 {m.min_range:.1f} m ({why})"
+            s = f"命中 (脱靶量 {m.min_range:.1f} m)"
+        else:
+            s = f"脱靶 {m.min_range:.1f} m ({why})"
+        if m.params.phased and not m.acquired:
+            s += " · 导引头未截获"
+        return s
 
     @property
     def running(self) -> bool:
