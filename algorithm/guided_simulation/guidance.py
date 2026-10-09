@@ -1,0 +1,281 @@
+# -*- coding: utf-8 -*-
+"""导弹导引仿真 —— 导引律与质点运动学模型.
+
+坐标系约定
+----------
+* 二维平面直角坐标系, 单位: 米(m), x 轴向右, y 轴向上(数学惯例, 屏幕绘制时翻转).
+* 角度: 弧度(rad), 从 +x 轴起逆时针为正.
+* 导弹/目标均当作"质点 + 速度矢量"处理(圆运动学), 侧向过载 a 改变速度矢量方向:
+      d(航向)/dt = a / V
+
+包含
+----
+* :class:`MissileParams`  导弹制导参数
+* :class:`Target`         目标飞机(可直线 / 转弯 / 正弦机动)
+* :class:`Missile`        导弹(含比例导引、纯跟踪两种导引律)
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+G0 = 9.80665  # 重力加速度, 用于把 m/s^2 换算为过载 g
+
+
+# --------------------------------------------------------------------------
+# 通用小工具
+# --------------------------------------------------------------------------
+def wrap_pi(a: float) -> float:
+    """把角度归一化到 (-pi, pi]."""
+    a = math.fmod(a + math.pi, 2.0 * math.pi)
+    if a < 0.0:
+        a += 2.0 * math.pi
+    return a - math.pi
+
+
+def clamp(v: float, lo: float, hi: float) -> float:
+    return lo if v < lo else (hi if v > hi else v)
+
+
+def closest_on_segment(px, py, ax, ay, bx, by):
+    """点 p 到线段 ab 的距离与最近点(用于精确计算脱靶量)."""
+    vx, vy = bx - ax, by - ay
+    wx, wy = px - ax, py - ay
+    l2 = vx * vx + vy * vy
+    t = 0.0 if l2 <= 1e-12 else clamp((wx * vx + wy * vy) / l2, 0.0, 1.0)
+    cx, cy = ax + t * vx, ay + t * vy
+    return math.hypot(px - cx, py - cy), cx, cy
+
+
+# --------------------------------------------------------------------------
+# 参数
+# --------------------------------------------------------------------------
+@dataclass
+class MissileParams:
+    """导弹制导参数(两种导弹共享一份)."""
+
+    nav_ratio: float = 4.0    # N  比例导引导航比
+    pp_gain: float = 4.0      # K  纯跟踪航向修正增益 (1/s)
+    max_g: float = 9.0        # 最大可用法向过载 (g)
+    tau: float = 0.3          # 执行机构/弹体 一阶时间常数 (s)
+    use_vc: bool = True       # 比例导引系数中用接近速度 Vc(否则用弹速 Vm)
+
+
+# --------------------------------------------------------------------------
+# 目标飞机
+# --------------------------------------------------------------------------
+class Target:
+    """目标飞机质点模型.
+
+    机动模式 mode:
+        * ``straight`` 匀速直线
+        * ``left``     持续左转(逆时针), 转弯率 = +turn_rate
+        * ``right``    持续右转(顺时针), 转弯率 = -turn_rate
+        * ``sine``     正弦机动, 转弯率 = turn_rate * sin(2*pi*t/period)
+    """
+
+    MODES = ("straight", "left", "right", "sine")
+
+    def __init__(self, x, y, heading_deg, speed,
+                 mode="straight", turn_rate_deg=6.0, period=4.0):
+        self.x0, self.y0 = float(x), float(y)
+        self.h0 = float(heading_deg)
+        self.speed = float(speed)
+        self.mode = mode
+        self.turn_rate = float(turn_rate_deg)
+        self.period = float(period)
+        self.reset()
+
+    def reset(self):
+        self.x, self.y = self.x0, self.y0
+        self.heading = math.radians(self.h0)
+        self.t = 0.0
+        self.omega = 0.0          # 当前转弯角速度 rad/s
+        self.trail = [(self.x, self.y)]
+
+    @property
+    def vx(self):
+        return self.speed * math.cos(self.heading)
+
+    @property
+    def vy(self):
+        return self.speed * math.sin(self.heading)
+
+    @property
+    def heading_deg(self):
+        return math.degrees(self.heading)
+
+    def step(self, dt: float):
+        """推进一个仿真步长."""
+        w = math.radians(self.turn_rate)
+        if self.mode == "straight":
+            self.omega = 0.0
+        elif self.mode == "left":
+            self.omega = w
+        elif self.mode == "right":
+            self.omega = -w
+        else:  # sine
+            self.omega = w * math.sin(2.0 * math.pi * self.t / max(self.period, 1e-3))
+
+        self.heading = wrap_pi(self.heading + self.omega * dt)
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+        self.t += dt
+        self.trail.append((self.x, self.y))
+
+
+# --------------------------------------------------------------------------
+# 导弹
+# --------------------------------------------------------------------------
+class Missile:
+    """导弹质点模型 + 两种导引律.
+
+    kind:
+        * ``"pn"`` 比例导引 Proportional Navigation
+        * ``"pp"`` 纯跟踪(追踪法) Pure Pursuit
+
+    每个 step 的执行顺序::
+
+        1) 测量: 视线角 lambda、视线转率 lambda_dot、接近速度 Vc
+        2) 导引律: 由测量量算出法向过载指令 a_cmd, 并按最大过载限幅
+        3) 执行机构: 一阶滞后 tau, 得到实际过载 a
+        4) 运动学积分: 航向 += a/V*dt ; 位置 += V*dt
+        5) 记录: 弹道、距离、过载等历史 + 最小距离(脱靶量)
+    """
+
+    def __init__(self, kind, name, color, x, y, heading_deg, speed, params: MissileParams):
+        self.kind = kind          # "pn" / "pp"
+        self.name = name          # 中文显示名
+        self.color = color
+        self.x0, self.y0 = float(x), float(y)
+        self.h0 = float(heading_deg)
+        self.v0 = float(speed)
+        self.params = params
+        self.reset()
+
+    # ------------------------------ 状态复位 ------------------------------
+    def reset(self):
+        self.x, self.y = self.x0, self.y0
+        self.heading = math.radians(self.h0)
+        self.speed = self.v0
+        self.a = 0.0              # 当前实际法向过载 (m/s^2)
+        self.a_cmd = 0.0          # 过载指令 (m/s^2)
+        self.t = 0.0
+        # 观测量
+        self.range = 0.0
+        self.los = 0.0
+        self.los_dot = 0.0
+        self.vc = 0.0
+        # 脱靶量
+        self.min_range = float("inf")
+        self.min_point = (self.x, self.y)
+        self.min_t = 0.0
+        self.closed_once = False  # 是否曾经处于"接近"状态
+        self.open_t = 0.0          # 处于"远离"状态的累计时间
+        # 结果
+        self.done = False
+        self.hit = False
+        self.result = "飞行中"
+        # 历史
+        self.trail = [(self.x, self.y)]
+        self.hist_t, self.hist_r = [], []
+        self.hist_a, self.hist_vc, self.hist_losdot = [], [], []
+
+    # ------------------------------ 观测 ------------------------------
+    def sense(self, tgt: Target):
+        """计算视线角 lambda、视线转率 lambda_dot、接近速度 Vc."""
+        dx = tgt.x - self.x
+        dy = tgt.y - self.y
+        r2 = dx * dx + dy * dy
+        r = math.sqrt(r2)
+        vx = self.speed * math.cos(self.heading)
+        vy = self.speed * math.sin(self.heading)
+        rvx = tgt.vx - vx           # 相对速度
+        rvy = tgt.vy - vy
+
+        los = math.atan2(dy, dx)
+        # lambda_dot = (r x v_rel) / |r|^2   (二维叉积)
+        los_dot = (dx * rvy - dy * rvx) / max(r2, 1.0)
+        # Vc = -d(r)/dt = -(r . v_rel)/|r|
+        vc = -(dx * rvx + dy * rvy) / r if r > 1e-6 else 0.0
+        return r, los, los_dot, vc
+
+    # ------------------------------ 导引律 ------------------------------
+    def guidance_command(self, r, los, los_dot, vc):
+        """导引律: 计算法向过载指令 (m/s^2).
+
+        比例导引 (PN):
+            a_cmd = N * V_ref * lambda_dot
+            其中 V_ref = Vc (接近速度, 工程常用) 或 Vm (经典形式).
+            等价于: 导弹速度矢量转率 = N * 视线转率.
+
+        纯跟踪 (PP):
+            a_cmd = Vm * K * wrap(lambda - psi)
+            即: 航向以增益 K 收敛到视线方向 -> 速度矢量始终指向目标.
+        """
+        p = self.params
+        if self.kind == "pn":
+            v_ref = vc if (p.use_vc and vc > 0.0) else float(self.speed)
+            return p.nav_ratio * v_ref * los_dot
+        # 纯跟踪
+        return self.speed * p.pp_gain * wrap_pi(los - self.heading)
+
+    # ------------------------------ 单步推进 ------------------------------
+    def step(self, tgt: Target, dt: float):
+        if self.done:
+            return
+        p = self.params
+        r, los, los_dot, vc = self.sense(tgt)
+        self.range, self.los, self.los_dot, self.vc = r, los, los_dot, vc
+
+        # 1) 导引律 -> 过载指令(带饱和)
+        a_max = p.max_g * G0
+        self.a_cmd = clamp(self.guidance_command(r, los, los_dot, vc), -a_max, a_max)
+
+        # 2) 执行机构一阶滞后
+        alpha = 1.0 - math.exp(-dt / max(p.tau, 1e-3))
+        self.a += (self.a_cmd - self.a) * alpha
+        self.a = clamp(self.a, -a_max, a_max)
+
+        # 3) 运动学积分(半隐式欧拉: 先转航向再平移)
+        px, py = self.x, self.y
+        self.heading = wrap_pi(self.heading + self.a / max(self.speed, 1.0) * dt)
+        self.x += self.speed * math.cos(self.heading) * dt
+        self.y += self.speed * math.sin(self.heading) * dt
+        self.t += dt
+
+        # 4) 目标到本段弹道的最小距离(精确脱靶量)
+        d, cx, cy = closest_on_segment(tgt.x, tgt.y, px, py, self.x, self.y)
+        if d < self.min_range:
+            self.min_range = d
+            self.min_point = (cx, cy)
+            self.min_t = self.t
+        self.range = math.hypot(tgt.x - self.x, tgt.y - self.y)
+
+        # 5) 历史记录
+        self.hist_t.append(self.t)
+        self.hist_r.append(self.range)
+        self.hist_a.append(self.a)
+        self.hist_vc.append(vc)
+        self.hist_losdot.append(los_dot)
+        self.trail.append((self.x, self.y))
+
+    # ------------------------------ 显示辅助 ------------------------------
+    @property
+    def heading_deg(self):
+        return math.degrees(self.heading)
+
+    @property
+    def overload_g(self):
+        """当前过载(单位 g)."""
+        return self.a / G0
+
+    @property
+    def los_deg(self):
+        return math.degrees(self.los)
+
+    @property
+    def los_dot_dps(self):
+        """视线转率 (°/s)."""
+        return math.degrees(self.los_dot)
