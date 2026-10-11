@@ -408,8 +408,8 @@
     }
     const html = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
       + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-      + '<title>AP Tune 飞行报告</title><style>' + CHART_EXPORT_CSS + '</style></head><body>'
-      + '<h1>AP Tune 飞行报告</h1>'
+      + '<title>扶摇 FuyaoTune 飞行报告</title><style>' + CHART_EXPORT_CSS + '</style></head><body>'
+      + '<h1>扶摇 FuyaoTune 飞行报告</h1>'
       + '<pre>' + escapeHtml(report) + '</pre>'
       + chartsHtml
       + '</body></html>';

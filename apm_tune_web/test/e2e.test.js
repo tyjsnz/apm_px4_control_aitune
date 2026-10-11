@@ -327,7 +327,7 @@ async function part2Server(logFiles) {
   });
   srv.stdout.on('data', (d) => process.env.E2E_VERBOSE && process.stdout.write('[srv] ' + d));
   srv.stderr.on('data', (d) => process.env.E2E_VERBOSE && process.stderr.write('[srv] ' + d));
-  await lineReader(srv).wait('AP Tune 已启动', 8000);
+  await lineReader(srv).wait('扶摇 FuyaoTune 已启动', 8000);
 
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
   const messages = [];

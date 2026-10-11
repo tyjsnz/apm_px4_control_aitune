@@ -1,4 +1,4 @@
-# AP Tune 服务器部署指南 (Web Serial 版)
+# 扶摇 FuyaoTune 服务器部署指南 (Web Serial 版)
 
 本版本把飞控链路移到了**浏览器端**:
 

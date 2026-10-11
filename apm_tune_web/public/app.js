@@ -930,7 +930,7 @@ try { tcCollapsed = localStorage.getItem('tcCollapsed') === '1'; } catch (e) { /
 setThrustCheckCollapsed(tcCollapsed);
 renderThrustCheck();
 renderCategories();
-console.log('AP Tune 前端已初始化');
+console.log('扶摇 FuyaoTune 前端已初始化');
 
 // Web Serial 支持检测 (Firefox/Safari 不支持; 非安全上下文下 navigator.serial 也不存在)
 if (typeof FcSerial !== 'undefined' && !FcSerial.supported()) {

@@ -416,7 +416,7 @@ async function handleClientMessage(ws, msg) {
 
 // ==================== 启动 ====================
 server.listen(PORT, HOST, () => {
-  console.log(`AP Tune 已启动: http://localhost:${PORT} (监听 ${HOST})`);
+  console.log(`扶摇 FuyaoTune 已启动: http://localhost:${PORT} (监听 ${HOST})`);
   console.log('串口连接由浏览器 Web Serial 直连 (需 Chrome/Edge + HTTPS 或 localhost)');
   if (AUTH_ON) console.log('已启用 HTTP Basic 认证');
   else console.log('⚠ 未启用认证 (公网部署请设置 AUTH_USER / AUTH_PASS)');

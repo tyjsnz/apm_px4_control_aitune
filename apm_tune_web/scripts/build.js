@@ -72,19 +72,19 @@ function makeLauncher(kind, target) {
   if (kind === 'win') {
     return '@echo off\r\n'
       + 'cd /d "%~dp0"\r\n'
-      + 'echo 启动 AP Tune ...\r\n'
+      + 'echo 启动 扶摇 FuyaoTune ...\r\n'
       + '"%~dp0runtime\\node.exe" "%~dp0server.js" --open\r\n'
       + 'if errorlevel 1 pause\r\n';
   }
   const sh = kind === 'mac' ? 'start.command' : 'start.sh';
   return `#!/bin/bash\n`
     + `cd "$(dirname "$0")"\n`
-    + `echo "启动 AP Tune ..."\n`
+    + `echo "启动 扶摇 FuyaoTune ..."\n`
     + `"./runtime/bin/node" "./server.js" --open\n`
     + `if [ $? -ne 0 ]; then echo "启动失败，按回车退出"; read; fi\n`;
 }
 
-const README = `AP Tune（APM/ArduPilot 调参 & 日志分析 Web 工具）— 便携版
+const README = `扶摇 FuyaoTune（ArduPilot · PX4 双飞控调参 & 日志分析 Web 工具）— 便携版
 ========================================================
 1. 电脑用 USB 连接飞控（无需驱动串口服务, 串口由浏览器 Web Serial 直连）。
 2. 运行启动器:

@@ -1,4 +1,4 @@
-# AP Tune 服务器部署
+# 扶摇 FuyaoTune 服务器部署
 #   基础启动:  docker compose up -d --build          → http://服务器IP:3000
 #   启用 HTTPS (Web Serial 需要安全上下文, 公网部署必须):  见下方 caddy profile
 #

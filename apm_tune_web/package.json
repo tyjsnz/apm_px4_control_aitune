@@ -1,11 +1,11 @@
 {
-  "name": "apm-tune-web",
+  "name": "fuyao-tune",
   "version": "1.0.0",
-  "description": "APM/ArduPilot tuning web interface — browser connects the FC via Web Serial; server provides AI proxy & storage",
+  "description": "扶摇 FuyaoTune — ArduPilot/PX4 dual-FC tuning web tool; browser connects the FC via Web Serial; server provides AI proxy & storage",
   "type": "module",
   "main": "server.js",
   "bin": {
-    "apm-tune": "server.js"
+    "fuyao-tune": "server.js"
   },
   "scripts": {
     "start": "node server.js --open",
