@@ -390,6 +390,7 @@ function setParam(name, value) {
   } else if (Number.isInteger(Number(value))) {
     paramType = 6; // 未知参数: 值为整数时先按 INT32 尝试
   }
+  recordSessionChange(paramName, parseFloat(value));   // 会话改动记录 (供 diff/回滚)
   ws.send(JSON.stringify({
     type: 'set_param',
     paramId: paramName,
@@ -409,6 +410,77 @@ function findParamItem(name) {
 
 function getItemRange(item) {
   return { min: item.min || 0, max: item.max || 9999, step: item.step || 1 };
+}
+
+// ==================== 会话改动记录 (手动写入 diff + 一键回滚) ====================
+// 只记录本会话内通过界面手动写入的参数 (一键首飞走 ot_write 通道, 自带备份不重复记录)
+const sessionChanges = new Map();   // paramName -> { old, new, time }
+
+function recordSessionChange(name, value) {
+  if (!connected || isNaN(value)) return;
+  const old = paramCache[name];
+  if (old === undefined || old === value) return;   // 未读到原值(无法回滚) / 值未变
+  const rec = sessionChanges.get(name);
+  if (rec) {
+    if (value === rec.old) return;      // 会话中来回切换, 保留最初原值
+    rec.new = value;
+  } else {
+    sessionChanges.set(name, { old, new: value, time: Date.now() });
+  }
+  renderSessionDiff();
+}
+
+function syncSessionChangeOnSet(name, value) {
+  const rec = sessionChanges.get(name);
+  if (!rec) return;
+  if (value === rec.old) sessionChanges.delete(name);   // 已恢复原值, 移出列表
+  else rec.new = value;
+  renderSessionDiff();
+}
+
+function rollbackParam(name) {
+  const rec = sessionChanges.get(name);
+  if (!rec) return;
+  setParam(name, rec.old);   // param_set_sent 确认后自动移出改动列表
+}
+
+function rollbackAllParams() {
+  if (!sessionChanges.size) return;
+  if (!confirm(`将 ${sessionChanges.size} 项参数写回本会话开始时的原值, 继续?`)) return;
+  for (const [name, rec] of [...sessionChanges]) setParam(name, rec.old);
+}
+
+function renderSessionDiff() {
+  const box = document.getElementById('sessionDiff');
+  if (!box) return;
+  const n = sessionChanges.size;
+  box.style.display = n ? 'block' : 'none';
+  document.getElementById('sdCount').textContent = n;
+
+  const list = document.getElementById('sdList');
+  list.innerHTML = '';
+  for (const [name, rec] of sessionChanges) {
+    const row = document.createElement('div');
+    row.className = 'sd-row';
+
+    const label = document.createElement('span');
+    label.className = 'sd-name';
+    label.textContent = name;
+
+    const arrow = document.createElement('span');
+    arrow.className = 'sd-values';
+    arrow.textContent = `${rec.old} → ${rec.new}`;
+
+    const btn = document.createElement('button');
+    btn.className = 'btn-mini';
+    btn.textContent = '撤销';
+    btn.onclick = () => rollbackParam(name);
+
+    row.appendChild(label);
+    row.appendChild(arrow);
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
 }
 
 function rebootFC() {
@@ -479,6 +551,8 @@ ws.onmessage = (e) => {
     document.getElementById('paramSearch').disabled = true;
     document.getElementById('categoryFilter').disabled = true;
     document.getElementById('telemetryPanel').style.display = 'none';
+    sessionChanges.clear();      // 断开后丢弃会话改动记录 (原值快照不再可信)
+    renderSessionDiff();
     if (typeof OneTouch !== 'undefined') OneTouch.setConnected(false);
     if (typeof DataTools !== 'undefined') DataTools.setConnected(false);
     document.getElementById('paramPanel').innerHTML = `
@@ -512,6 +586,7 @@ ws.onmessage = (e) => {
   if (msg.type === 'param_value') {
     paramCache[msg.paramId] = msg.paramValue;
     updateParamDisplay(msg.paramId, msg.paramValue);
+    if (fullParamsActive()) appendFullParamRow(msg.paramId);   // 全量模式: 流式读取时增量插入
     if (TC_PARAMS.includes(msg.paramId)) scheduleThrustCheck();
   }
 
@@ -519,6 +594,7 @@ ws.onmessage = (e) => {
   if (msg.type === 'param_set_sent') {
     paramCache[msg.paramId] = msg.paramValue;
     updateParamDisplay(msg.paramId, msg.paramValue);
+    syncSessionChangeOnSet(msg.paramId, msg.paramValue);   // 写回原值后自动移出改动列表
     if (TC_PARAMS.includes(msg.paramId)) scheduleThrustCheck();
     // 闪烁提示
     const el = document.getElementById('val_' + msg.paramId);
@@ -600,6 +676,19 @@ function renderCategories() {
     list.appendChild(cat);
   });
 
+  // 全量参数浏览器入口 (飞控实读参数全集, 未收录参数也可查可写)
+  const fullOpt = document.createElement('option');
+  fullOpt.value = '__full__';
+  fullOpt.textContent = '全量参数 (FC 实读)';
+  filter.appendChild(fullOpt);
+
+  const fullCat = document.createElement('div');
+  fullCat.className = 'category';
+  fullCat.dataset.index = 'full';
+  fullCat.innerHTML = '<h3>全量参数 (FC 实读)</h3>';
+  fullCat.onclick = () => scrollToCategory('full');
+  list.appendChild(fullCat);
+
   // 默认选中第一个
   if (activeGroups().length) {
     list.querySelector('.category').classList.add('active');
@@ -610,13 +699,30 @@ function renderCategories() {
 
 function setActiveCategory(gi) {
   document.querySelectorAll('.category').forEach((c) => {
-    c.classList.toggle('active', Number(c.dataset.index) === gi);
+    c.classList.toggle('active', String(c.dataset.index) === String(gi));
   });
   currentCategory = gi;
 }
 
+function highlightGroup(el) {
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  el.classList.remove('highlight');
+  void el.offsetWidth; // 重启动画
+  el.classList.add('highlight');
+  setTimeout(() => el.classList.remove('highlight'), 1200);
+}
+
 function scrollToCategory(gi) {
   setActiveCategory(gi);
+
+  // 全量参数浏览器: 同步下拉框并重渲染 (分组 id 为 group-full)
+  if (String(gi) === 'full') {
+    document.getElementById('categoryFilter').value = '__full__';
+    renderParams();
+    highlightGroup(document.getElementById('group-full'));
+    return;
+  }
 
   let el = document.getElementById('group-' + gi);
   if (!el) {
@@ -626,13 +732,7 @@ function scrollToCategory(gi) {
     renderParams();
     el = document.getElementById('group-' + gi);
   }
-  if (!el) return;
-
-  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  el.classList.remove('highlight');
-  void el.offsetWidth; // 重启动画
-  el.classList.add('highlight');
-  setTimeout(() => el.classList.remove('highlight'), 1200);
+  highlightGroup(el);
 }
 
 // 滚动时同步左侧选中项
@@ -653,7 +753,7 @@ function syncActiveCategory() {
       else break;
     }
   }
-  setActiveCategory(Number(active.dataset.index));
+  setActiveCategory(active.dataset.index);
 }
 
 function renderParams() {
@@ -663,6 +763,12 @@ function renderParams() {
   const starOnly = document.getElementById('starFilter').checked;
 
   panel.innerHTML = '';
+
+  // 全量参数浏览器模式: 枚举飞控实读参数全集
+  if (catFilter === '__full__') {
+    renderFullParams(search, starOnly);
+    return;
+  }
 
   let totalCount = 0;
   let shownCount = 0;
@@ -698,60 +804,12 @@ function renderParams() {
       shownCount++;
       groupHasVisible = true;
 
-      const range = getItemRange(item);
-
-      const row = document.createElement('div');
-      row.className = 'param-row';
-      row.dataset.paramName = namePlain;
-
-      // 参数名
-      const label = document.createElement('div');
-      label.className = 'param-name';
-      const starHtml = isStar ? '<span class="star">*</span>' : '';
-      label.innerHTML = `${starHtml}${name}`;
-
-      // 当前值
-      const currentVal = paramCache[namePlain] !== undefined ? paramCache[namePlain] : '';
-      const valInput = document.createElement('input');
-      valInput.type = 'number';
-      valInput.className = 'param-value';
-      valInput.id = 'val_' + namePlain;
-      valInput.step = range.step || 1;
-      valInput.min = range.min;
-      valInput.max = range.max;
-      valInput.value = currentVal !== '' ? currentVal : (range.min || '');
-      valInput.placeholder = '读取中...';
-      valInput.disabled = !connected;
-
-      // 单位
-      const unitSpan = document.createElement('span');
-      unitSpan.className = 'param-unit';
-      unitSpan.textContent = item.unit || '';
-
-      // 描述
-      const desc = document.createElement('div');
-      desc.className = 'param-hint';
-      desc.textContent = item.desc;
-
-      // 写入按钮
-      const btn = document.createElement('button');
-      btn.className = 'btn-write';
-      btn.textContent = '写入';
-      btn.onclick = () => {
-        const v = parseFloat(valInput.value);
-        if (isNaN(v)) return alert('请输入有效数值');
-        if (v < range.min || v > range.max) {
-          if (!confirm(`值 ${v} 超出推荐范围 [${range.min}, ${range.max}]，确定写入？`)) return;
-        }
-        setParam(name, v);
-      };
-
-      row.appendChild(label);
-      row.appendChild(valInput);
-      row.appendChild(unitSpan);
-      row.appendChild(desc);
-      row.appendChild(btn);
-      groupDiv.appendChild(row);
+      groupDiv.appendChild(buildParamRow({
+        name,
+        desc: item.desc,
+        unit: item.unit,
+        range: getItemRange(item),
+      }));
     }
 
     if (groupHasVisible) {
@@ -762,6 +820,153 @@ function renderParams() {
   if (shownCount === 0) {
     panel.innerHTML = '<div class="empty-state"><p>没有找到匹配的参数</p></div>';
   }
+}
+
+// ---------- 参数行构建 (参数表/全量浏览器共用) ----------
+function buildParamRow(opt) {
+  const name = opt.name;
+  const namePlain = name.replace(/^\*/, '');
+  const isStar = name.startsWith('*');
+  const noRange = !!opt.noRange;   // 全量模式的未收录参数: 无推荐范围, 不做范围校验
+  const range = noRange ? null : (opt.range || getItemRange({ min: 0, max: 9999, step: 1 }));
+
+  const row = document.createElement('div');
+  row.className = 'param-row';
+  row.dataset.paramName = namePlain;
+
+  // 参数名
+  const label = document.createElement('div');
+  label.className = 'param-name';
+  const starHtml = isStar ? '<span class="star">*</span>' : '';
+  label.innerHTML = `${starHtml}${name}`;
+
+  // 当前值
+  const currentVal = paramCache[namePlain] !== undefined ? paramCache[namePlain] : '';
+  const valInput = document.createElement('input');
+  valInput.type = 'number';
+  valInput.className = 'param-value';
+  valInput.id = 'val_' + namePlain;
+  if (noRange) {
+    valInput.step = 'any';
+  } else {
+    valInput.step = range.step || 1;
+    valInput.min = range.min;
+    valInput.max = range.max;
+  }
+  valInput.value = currentVal !== '' ? currentVal : (noRange ? '' : (range.min || ''));
+  valInput.placeholder = '读取中...';
+  valInput.disabled = !connected;
+
+  // 单位
+  const unitSpan = document.createElement('span');
+  unitSpan.className = 'param-unit';
+  unitSpan.textContent = opt.unit || '';
+
+  // 描述
+  const desc = document.createElement('div');
+  desc.className = 'param-hint';
+  desc.textContent = opt.desc || '';
+
+  // 写入按钮
+  const btn = document.createElement('button');
+  btn.className = 'btn-write';
+  btn.textContent = '写入';
+  btn.onclick = () => {
+    const v = parseFloat(valInput.value);
+    if (isNaN(v)) return alert('请输入有效数值');
+    if (!noRange && (v < range.min || v > range.max)) {
+      if (!confirm(`值 ${v} 超出推荐范围 [${range.min}, ${range.max}]，确定写入？`)) return;
+    }
+    setParam(name, v);
+  };
+
+  row.appendChild(label);
+  row.appendChild(valInput);
+  row.appendChild(unitSpan);
+  row.appendChild(desc);
+  row.appendChild(btn);
+  return row;
+}
+
+// ---------- 全量参数浏览器: 飞控实读参数全集 ----------
+/** 参数表索引: { 参数名 -> PARAM_GROUPS 中的定义项 } */
+function fullParamMeta() {
+  const map = new Map();
+  for (const g of activeGroups()) {
+    for (const it of g.items) {
+      const plain = it.name.replace(/^\*/, '');
+      if (!map.has(plain)) map.set(plain, it);
+    }
+  }
+  return map;
+}
+
+function renderFullParams(search, starOnly) {
+  const panel = document.getElementById('paramPanel');
+  const names = Object.keys(paramCache).sort();
+  if (!names.length) {
+    panel.innerHTML = '<div class="empty-state"><p>尚未读取到飞控参数</p><p class="hint">连接后自动拉取, 也可点击「刷新参数」</p></div>';
+    return;
+  }
+  const metaMap = fullParamMeta();
+
+  const groupDiv = document.createElement('div');
+  groupDiv.className = 'param-group';
+  groupDiv.id = 'group-full';
+  groupDiv.dataset.index = 'full';
+
+  const header = document.createElement('div');
+  header.className = 'param-group-header';
+  header.id = 'fullHeader';
+  header.textContent = `全量参数 (飞控实读 ${names.length} 项)`;
+  groupDiv.appendChild(header);
+
+  let shown = 0;
+  for (const plain of names) {
+    const known = metaMap.get(plain);
+    if (starOnly && !(known && known.name.startsWith('*'))) continue;
+    if (search) {
+      const hit = plain.toLowerCase().includes(search) ||
+        (known && known.desc.toLowerCase().includes(search));
+      if (!hit) continue;
+    }
+    shown++;
+    groupDiv.appendChild(known
+      ? buildParamRow({ name: known.name, desc: known.desc, unit: known.unit, range: getItemRange(known) })
+      : buildParamRow({ name: plain, desc: '固件实读参数 (参数表未收录)', unit: '', noRange: true }));
+  }
+
+  if (!shown) {
+    panel.innerHTML = '<div class="empty-state"><p>没有找到匹配的参数</p></div>';
+    return;
+  }
+  panel.appendChild(groupDiv);
+}
+
+function fullParamsActive() {
+  return document.getElementById('categoryFilter').value === '__full__';
+}
+
+/** 参数流式读取过程中, 增量插入新到达的行 (避免整页重渲染丢滚动位置/输入) */
+function appendFullParamRow(namePlain) {
+  let group = document.getElementById('group-full');
+  if (!group) { renderParams(); return; }   // 面板尚无全量分组 (如从空状态恢复)
+  if (document.getElementById('val_' + namePlain)) return;   // 行已存在
+
+  const metaMap = fullParamMeta();
+  const known = metaMap.get(namePlain);
+  const row = known
+    ? buildParamRow({ name: known.name, desc: known.desc, unit: known.unit, range: getItemRange(known) })
+    : buildParamRow({ name: namePlain, desc: '固件实读参数 (参数表未收录)', unit: '', noRange: true });
+
+  // 按参数名排序插入
+  const rows = [...group.querySelectorAll('.param-row')];
+  const after = rows.find((r) => r.dataset.paramName > namePlain);
+  if (after) group.insertBefore(row, after);
+  else group.appendChild(row);
+
+  const header = document.getElementById('fullHeader');
+  if (header) header.textContent = `全量参数 (飞控实读 ${Object.keys(paramCache).length} 项)`;
 }
 
 function updateParamDisplay(paramId, value) {
@@ -980,9 +1185,9 @@ document.getElementById('btnTcAi')?.addEventListener('click', tcAiAnalyze);
 document.getElementById('paramSearch').addEventListener('input', renderParams);
 document.getElementById('starFilter').addEventListener('change', renderParams);
 document.getElementById('categoryFilter').addEventListener('change', (e) => {
-  renderParams();
   const v = e.target.value;
-  if (v !== 'all') scrollToCategory(parseInt(v, 10));
+  if (v === 'all') { renderParams(); return; }
+  scrollToCategory(v === '__full__' ? 'full' : parseInt(v, 10));
 });
 
 // 右侧滚动时同步左侧选中项
@@ -1004,6 +1209,7 @@ document.getElementById('btnConnect').onclick = connect;
 document.getElementById('btnDisconnect').onclick = disconnect;
 document.getElementById('btnReboot').onclick = rebootFC;
 document.getElementById('btnRefreshParams').onclick = requestParams;
+document.getElementById('btnRollbackAll').onclick = rollbackAllParams;
 document.getElementById('btnBackup').onclick = () => switchView('backup');
 document.getElementById('btnRestore').onclick = () => switchView('backup');
 

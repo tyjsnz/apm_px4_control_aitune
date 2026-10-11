@@ -224,6 +224,47 @@ button:active:not(:disabled) {
   accent-color: var(--star-color);
 }
 
+/* ==================== 会话改动记录 (diff/回滚) ==================== */
+.session-diff {
+  display: none;   /* 有改动时由 JS 显示 */
+  padding: 6px 20px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.sd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sd-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.sd-name {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  min-width: 160px;
+}
+
+.sd-values {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.btn-mini {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
 /* ==================== Main Layout ==================== */
 .view-tabs {
   display: flex;
