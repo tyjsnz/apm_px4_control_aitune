@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url';
 
 import { analyzeLogAuto, buildLogUserPrompt, pickLogSystemPrompt, extractChartsAuto } from './lib/loganalysis.js';
 import { FAULT_SYSTEM_PROMPT, buildFaultUserPrompt } from './lib/faultai.js';
+import { THRUST_SYSTEM_PROMPT, buildThrustUserPrompt } from './lib/thrustai.js';
 import { createFaultStore } from './lib/faultstore.js';
 import { createAiConfigStore } from './lib/aiconfigstore.js';
 import { aiChat, providerList, providerInfo } from './lib/ai.js';
@@ -330,6 +331,35 @@ async function faultAnalyze(ws, msg) {
   send(ws, { type: 'fault_analyze_done', ok: true, report: r.text, at: new Date().toISOString() });
 }
 
+/** 推力线性化体检 AI 分析: 前端发送体检行/参数值/结论, 返回优化与修改建议 */
+async function thrustAnalyze(ws, msg) {
+  const values = msg.values || {};
+  if (!Object.keys(values).length) {
+    send(ws, { type: 'thrust_analyze_done', ok: false, error: '暂无体检数据: 请先连接飞控读取参数, 或在页面手工填写关键参数' });
+    return;
+  }
+  const ai = aiConfigStore.resolve(msg);
+  if (!aiReady(ai)) {
+    send(ws, { type: 'thrust_analyze_done', ok: false, error: '尚未配置可用的全局 AI，请先在「AI 设置」中完成配置' });
+    return;
+  }
+  send(ws, { type: 'thrust_analyze_start' });
+  const r = await aiChat({
+    provider: ai.provider,
+    apiKey: ai.apiKey,
+    model: ai.model,
+    baseUrl: ai.baseUrl,
+    system: THRUST_SYSTEM_PROMPT,
+    user: buildThrustUserPrompt(msg),
+    timeoutMs: 180000,
+  });
+  if (r.error) {
+    send(ws, { type: 'thrust_analyze_done', ok: false, error: r.error });
+    return;
+  }
+  send(ws, { type: 'thrust_analyze_done', ok: true, report: r.text, at: new Date().toISOString() });
+}
+
 async function handleClientMessage(ws, msg) {
   switch (msg.type) {
     // ---------- 日志本地管理 (文件存于服务器) ----------
@@ -400,6 +430,10 @@ async function handleClientMessage(ws, msg) {
     }
     case 'fault_analyze': {
       await faultAnalyze(ws, msg);
+      return;
+    }
+    case 'thrust_analyze': {
+      await thrustAnalyze(ws, msg);
       return;
     }
     default:

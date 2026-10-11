@@ -462,26 +462,45 @@ button:active:not(:disabled) {
     display: none !important;
   }
 }
-/* ==================== 推力线性化体检 ==================== */
+/* ==================== 推力线性化体检 (独立 tab) ==================== */
 .thrust-check {
-  flex-shrink: 0;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin: 12px;
+  padding-bottom: 12px;
 }
 
 .tc-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 20px;
-  cursor: pointer;
-  user-select: none;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
 }
 
 .tc-head h3 {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.tc-head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tc-esc {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
 }
 
 .tc-summary {
@@ -503,26 +522,73 @@ button:active:not(:disabled) {
   border-color: rgba(210, 153, 34, 0.5);
 }
 
-.tc-toggle {
-  margin-left: auto;
+.tc-body {
+  padding: 10px 16px 0;
+}
+
+/* 手工体检输入行 */
+.tc-manual {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--bg-primary);
+  border: 1px dashed var(--border-color);
+  border-radius: 6px;
+}
+
+.tc-manual-label {
   font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tc-inputs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tc-input-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
-.tc-body {
-  padding: 0 20px 10px;
+.tc-input-item input {
+  width: 72px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
 }
 
-.thrust-check.collapsed .tc-body {
-  display: none;
+.tc-btn-ghost {
+  opacity: 0.75;
+}
+
+/* 左表 + 右曲线 */
+.tc-main {
+  display: grid;
+  grid-template-columns: 1fr 384px;
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .tc-main { grid-template-columns: 1fr; }
 }
 
 .tc-rows {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 184px;
-  overflow-y: auto;
 }
 
 .tc-row {
@@ -568,4 +634,89 @@ button:active:not(:disabled) {
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 8px 10px;
+}
+
+/* 曲线预览 */
+.tc-right {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.tc-right canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.tc-curve-legend {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.tc-leg::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  border-top: 2px solid currentColor;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.tc-leg-ideal { color: var(--text-muted); }
+.tc-leg-ideal::before { border-top-style: dashed; }
+.tc-leg-expo { color: var(--accent); }
+.tc-leg-hover { color: var(--success); }
+.tc-leg-hover::before { border-top-style: dotted; }
+
+.tc-curve-note {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* AI 建议面板 */
+.tc-ai {
+  margin-top: 12px;
+}
+
+.tc-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.tc-ai-status {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.tc-ai textarea {
+  display: block;
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  resize: vertical;
+  margin-bottom: 6px;
+}
+
+#tcAiNote {
+  color: var(--text-secondary);
 }

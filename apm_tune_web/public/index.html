@@ -45,6 +45,7 @@
 
   <nav class="view-tabs">
     <button id="tabParams" class="view-tab active" data-view="params">参数速查</button>
+    <button id="tabThrust" class="view-tab" data-view="thrust">动力体检</button>
     <button id="tabOnetouch" class="view-tab" data-view="onetouch">一键首飞</button>
     <button id="tabBackup" class="view-tab" data-view="backup">备份恢复</button>
     <button id="tabLogs" class="view-tab" data-view="logs">日志分析</button>
@@ -53,18 +54,6 @@
 
   <!-- ==================== 参数速查 ==================== -->
   <div id="viewParams" class="view">
-    <section class="thrust-check" id="thrustCheck">
-      <div class="tc-head" id="tcHead" title="点击展开/收起">
-        <h3>推力线性化体检</h3>
-        <span id="tcSummary" class="tc-summary">未连接</span>
-        <span id="tcToggle" class="tc-toggle">收起 ▲</span>
-      </div>
-      <div class="tc-body" id="tcBody">
-        <div class="tc-rows" id="tcRows"></div>
-        <div class="tc-verdict" id="tcVerdict">连接飞控并读取参数后自动评估。</div>
-      </div>
-    </section>
-
     <section class="search-bar">
       <input type="text" id="paramSearch" placeholder="搜索参数名或描述..." disabled />
       <select id="categoryFilter" disabled>
@@ -87,6 +76,54 @@
   </div>
 
   <!-- ==================== 一键首飞 ==================== -->
+  <!-- ==================== 动力体检 (推力线性化) ==================== -->
+  <div id="viewThrust" class="view hidden">
+    <section class="thrust-check" id="thrustCheck">
+      <div class="tc-head">
+        <h3>推力线性化体检</h3>
+        <span id="tcSummary" class="tc-summary">未连接</span>
+        <span class="tc-head-actions">
+          <label class="tc-esc" title="若使用自带推力线性化的电调(多数现代 DShot 电调), 勾选后 EXPO 偏大会被标为警告">
+            <input type="checkbox" id="tcEscLinear" /> 电调已内置推力线性化
+          </label>
+          <button id="btnTcRead" title="重新从飞控读取推力相关参数">手动体检</button>
+          <button id="btnTcAi" title="由 AI 分析体检结果并给出参数修改建议">AI 分析建议</button>
+        </span>
+      </div>
+      <div class="tc-body">
+        <div class="tc-manual">
+          <span class="tc-manual-label">手工体检(手填值优先于实读):</span>
+          <span id="tcInputs" class="tc-inputs"></span>
+          <button id="btnTcReval">用手工值评估</button>
+          <button id="btnTcReset" class="tc-btn-ghost">清除手填</button>
+        </div>
+        <div class="tc-main">
+          <div class="tc-left">
+            <div class="tc-rows" id="tcRows"></div>
+            <div class="tc-verdict" id="tcVerdict">连接飞控并读取参数后自动评估。</div>
+          </div>
+          <div class="tc-right">
+            <canvas id="tcCurve" width="360" height="240"></canvas>
+            <div class="tc-curve-legend">
+              <span class="tc-leg tc-leg-ideal">理想线性</span>
+              <span class="tc-leg tc-leg-expo">当前 EXPO 补偿</span>
+              <span class="tc-leg tc-leg-hover">悬停点</span>
+            </div>
+            <div class="tc-curve-note">曲线为「期望推力 → 油门指令」映射(公式来自 ArduPilot AP_Motors_Thrust_Linearization 源码)。偏离直线的部分就是线性化补偿量; 电调已内置线性化时曲线应接近直线(EXPO≈0)。</div>
+          </div>
+        </div>
+        <div class="tc-ai">
+          <div class="tc-ai-head">
+            <span>AI 优化建议</span>
+            <span id="tcAiStatus" class="tc-ai-status"></span>
+          </div>
+          <textarea id="tcAiReport" rows="10" placeholder="点「AI 分析建议」后, 这里会给出针对当前体检数据的参数修改建议(需先在 AI 设置中配置)。可在下方备注机型/桨径/电池帮助 AI 判断。"></textarea>
+          <textarea id="tcAiNote" rows="2" placeholder="备注(可选): 机型/桨径/电池串数/现象, 例如「5寸 6S, 悬停油门 0.22, 低油门段有突跳」"></textarea>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <div id="viewOnetouch" class="view hidden">
     <div class="ot-inputs">
       <label>用途
@@ -340,6 +377,7 @@
   <script src="onetouch_data.js"></script>
   <script src="onetouch_px4.js"></script>
   <script src="aiconfig.js"></script>
+  <script src="thrustcheck.js"></script>
   <script src="app.js"></script>
   <script src="onetouch.js"></script>
   <script src="charts.js"></script>

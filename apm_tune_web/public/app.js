@@ -425,6 +425,21 @@ ws.onmessage = (e) => {
     alert('错误: ' + msg.message);
   }
 
+  if (msg.type === 'thrust_analyze_start') {
+    document.getElementById('btnTcAi').disabled = true;
+    document.getElementById('tcAiStatus').textContent = 'AI 分析中...';
+  }
+  if (msg.type === 'thrust_analyze_done') {
+    document.getElementById('btnTcAi').disabled = false;
+    const st = document.getElementById('tcAiStatus');
+    if (msg.ok) {
+      document.getElementById('tcAiReport').value = msg.report || '';
+      st.textContent = '完成 ' + new Date().toLocaleTimeString();
+    } else {
+      st.textContent = '失败: ' + (msg.error || '未知错误');
+    }
+  }
+
   // 参数值更新
   if (msg.type === 'param_value') {
     paramCache[msg.paramId] = msg.paramValue;
@@ -688,162 +703,70 @@ function updateParamDisplay(paramId, value) {
   }
 }
 
-// ==================== 推力线性化体检 ====================
-const TC_PARAMS = [
-  'MOT_THST_EXPO', 'MOT_THST_HOVER', 'MOT_HOVER_LEARN',
-  'MOT_SPIN_ARM', 'MOT_SPIN_MIN', 'MOT_SPIN_MAX',
-  'MOT_PWM_MIN', 'MOT_PWM_MAX', 'MOT_PWM_TYPE',
-];
-const TC_PWM_TYPE = ['PWM(50/100Hz)', 'OneShot', 'OneShot125', 'DShot1200', 'DShot900', 'DShot600', 'DShot300', 'DShot150'];
+// ==================== 推力线性化体检 (独立 tab, 纯逻辑在 thrustcheck.js) ====================
+const TC_PARAMS = window.ThrustCheck.TC_PARAMS;
 let tcTimer = null;
-
-const tcHas = (n) => paramCache[n] !== undefined;
-const tcNum = (n) => Number(paramCache[n]);
+let tcOverrides = {};   // 手工输入值 {参数名: 数值}, 优先于 paramCache 实读值
 
 function scheduleThrustCheck(delay) {
   clearTimeout(tcTimer);
   tcTimer = setTimeout(renderThrustCheck, delay === undefined ? 300 : delay);
 }
 
-function tcVerdict(rows) {
-  const warns = rows.filter((r) => r.level === 'warn').length;
-  const head = warns ? `发现 ${warns} 项需要关注（见上表）。` : '未发现需要关注的异常项。';
-  if (!tcHas('MOT_THST_EXPO')) return head + ' 未读到 MOT_THST_EXPO，无法给出线性化结论。';
-  const v = tcNum('MOT_THST_EXPO');
-  let tail;
-  if (v <= 0.2) {
-    tail = `EXPO=${v} 很小，飞控几乎不做线性化补偿 → 可认为当前电调+电机+桨已较线性，MOT_THST_EXPO 无需再调。`;
-  } else if (v < 0.45) {
-    tail = `EXPO=${v} 属中等补偿 → 参数本身可保持，但建议做一次地面油门阶梯实测，确认低油门段无死区、无突跳。`;
-  } else {
-    tail = `EXPO=${v} 明显（官方按桨径 5寸0.55/10寸0.65/20寸0.75，属正常配置）→ 不能据此判断电调硬件不线性；若悬停附近易振荡、小油门修正不跟手、自动调参反复变化，再考虑调整 EXPO。`;
+/** 当前生效的体检参数值: 手填覆盖 > 飞控实读 */
+function tcValues() {
+  const out = {};
+  for (const n of TC_PARAMS) {
+    const v = tcOverrides[n] !== undefined ? tcOverrides[n] : paramCache[n];
+    if (v !== undefined && v !== null && v !== '' && isFinite(Number(v))) out[n] = Number(v);
   }
-  return head + tail + ' 本结论基于参数体检，真实推力线性度仍需油门阶梯实测确认。';
+  return out;
+}
+
+function tcEscLinear() {
+  return !!(document.getElementById('tcEscLinear')?.checked
+    || document.getElementById('otEsc')?.checked);
 }
 
 function renderThrustCheck() {
-  const wrap = document.getElementById('thrustCheck');
   const rowsEl = document.getElementById('tcRows');
   const sumEl = document.getElementById('tcSummary');
   const verdictEl = document.getElementById('tcVerdict');
   if (!rowsEl) return;
 
-  // PX4 无 MOT_* 推力体检参数, 隐藏该面板 (ArduPilot 下恢复显示)
-  if (wrap) wrap.style.display = (connected && firmware === 'px4') ? 'none' : '';
-  if (connected && firmware === 'px4') {
-    sumEl.textContent = '—';
-    verdictEl.textContent = '推力体检为 ArduPilot 专属 (MOT_* 参数); PX4 请参考 QGC 电调配置。';
-    return;
-  }
-
-  if (!connected) {
+  const setEmpty = (sumText, sumCls, verdict) => {
     rowsEl.innerHTML = '';
-    sumEl.textContent = '未连接';
-    sumEl.className = 'tc-summary';
-    verdictEl.textContent = '连接飞控并读取参数后自动评估。';
+    sumEl.textContent = sumText;
+    sumEl.className = 'tc-summary' + (sumCls ? ' ' + sumCls : '');
+    verdictEl.textContent = verdict;
+    const cv = document.getElementById('tcCurve');
+    if (cv && cv.getContext) cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+  };
+
+  // PX4: 对应概念是 THR_MDL_FAC(默认 0 即可), 给指引而非隐藏
+  if (connected && firmware === 'px4') {
+    setEmpty('—', '', '推力线性化体检为 ArduPilot 专属 (MOT_* 参数体系); PX4 对应 THR_MDL_FAC (默认 0 一般无需配置), 电调配置请用 QGC。');
+    return;
+  }
+  const hasOverride = Object.keys(tcOverrides).length > 0;
+  if (!connected && !hasOverride) {
+    setEmpty('未连接', '', '连接飞控并读取参数后自动评估; 也可在下方手工填写关键参数直接体检。');
+    return;
+  }
+  const values = tcValues();
+  if (!Object.keys(values).length) {
+    if (hasOverride) setEmpty('—', '', '手填值无效，请检查输入');
+    else setEmpty('读取中...', '', '正在读取推力相关参数...');
     return;
   }
 
-  const rows = [];
-  const add = (name, value, level, text) => rows.push({ name, value, level, text });
-  const escLinear = !!document.getElementById('otEsc')?.checked;
-
-  if (!TC_PARAMS.some(tcHas)) {
-    sumEl.textContent = '读取中...';
-    sumEl.className = 'tc-summary';
-    verdictEl.textContent = '正在读取推力相关参数...';
-    return;
-  }
-
-  // 输出协议（对应"先看电调协议"）
-  if (!tcHas('MOT_PWM_TYPE')) {
-    add('MOT_PWM_TYPE', '--', 'na', '未读到该参数，跳过协议判定');
-  } else {
-    const t = tcNum('MOT_PWM_TYPE');
-    const label = TC_PWM_TYPE[t] !== undefined ? TC_PWM_TYPE[t] : `type=${t}`;
-    if (t === 0) add('MOT_PWM_TYPE', label, 'info', '传统 PWM 时序：需要电调行程校准，油门-推力非线性靠 MOT_THST_EXPO 补偿');
-    else if (t <= 2) add('MOT_PWM_TYPE', label, 'info', 'OneShot 类：仍属模拟 PWM 时序，建议配合 EXPO 补偿并做地面实测');
-    else add('MOT_PWM_TYPE', label, 'ok', 'DShot 系列：电调端通常已接近线性，一般无需传统 PWM 行程校准');
-  }
-
-  // MOT_THST_EXPO（核心判断）
-  if (!tcHas('MOT_THST_EXPO')) {
-    add('MOT_THST_EXPO', '--', 'na', '未读到该参数');
-  } else {
-    const v = tcNum('MOT_THST_EXPO');
-    let level = 'ok';
-    let text = '';
-    if (v <= 0.05) text = '≈0，飞控几乎不做线性化补偿 → 动力链已较线性，无需再调';
-    else if (v <= 0.2) text = '低补偿(0~0.2)，与"电调已内置线性化"匹配，无需再调';
-    else if (v < 0.45) { level = 'info'; text = '中等补偿，按桨径属偏低区间，建议地面油门阶梯实测确认低段无死区'; }
-    else { level = 'info'; text = '明显补偿（官方按桨径 5寸0.55/10寸0.65/20寸0.75），属正常配置，不等于电调硬件不线性'; }
-    if (escLinear && v > 0.3) {
-      level = 'warn';
-      text = `已勾选"电调已内置推力线性化"，但 EXPO=${v} 偏大 → 建议改为 0.10 左右`;
-    }
-    add('MOT_THST_EXPO', v, level, text);
-  }
-
-  // MOT_THST_HOVER
-  if (!tcHas('MOT_THST_HOVER')) {
-    add('MOT_THST_HOVER', '--', 'na', '未读到该参数');
-  } else {
-    const v = tcNum('MOT_THST_HOVER');
-    if (v < 0.05) add('MOT_THST_HOVER', v, 'warn', '低于 0.05，接近电机死区，低油门段控制余量不足');
-    else if (v > 0.6) add('MOT_THST_HOVER', v, 'warn', '高于 0.6，动力余量偏小，上升与抗风能力受限');
-    else add('MOT_THST_HOVER', v, 'ok', '在正常区间 0.05~0.5；多次飞行保持稳定说明动力链路较健康');
-  }
-
-  // 悬停自学习
-  if (!tcHas('MOT_HOVER_LEARN')) {
-    add('MOT_HOVER_LEARN', '--', 'na', '未读到该参数');
-  } else {
-    const v = tcNum('MOT_HOVER_LEARN');
-    if (v === 0) add('MOT_HOVER_LEARN', v, 'info', '悬停油门自学习已关闭，MOT_THST_HOVER 不会随飞行更新（建议 1 或 2）');
-    else add('MOT_HOVER_LEARN', v, 'ok', '自学习开启，悬停油门会在飞行中自动更新');
-  }
-
-  // 交叉：悬停油门 vs 飞行最小输出
-  if (tcHas('MOT_THST_HOVER') && tcHas('MOT_SPIN_MIN')) {
-    const h = tcNum('MOT_THST_HOVER');
-    const s = tcNum('MOT_SPIN_MIN');
-    if (h <= s + 0.03) add('HOVER ↔ SPIN_MIN', `${h} / ${s}`, 'warn', '悬停油门过于接近飞行最小输出，低油门修正几乎没有余量');
-    else add('HOVER ↔ SPIN_MIN', `${h} / ${s}`, 'ok', '悬停油门高于最小输出，低油门段仍有控制余量');
-  } else add('HOVER ↔ SPIN_MIN', '--', 'na', '缺 MOT_THST_HOVER 或 MOT_SPIN_MIN，跳过');
-
-  // 交叉：飞行最小输出 vs 解锁怠速
-  if (tcHas('MOT_SPIN_MIN') && tcHas('MOT_SPIN_ARM')) {
-    const mn = tcNum('MOT_SPIN_MIN');
-    const ar = tcNum('MOT_SPIN_ARM');
-    if (mn < ar + 0.03) add('SPIN_MIN ↔ SPIN_ARM', `${mn} / ${ar}`, 'warn', 'MOT_SPIN_MIN 必须 ≥ MOT_SPIN_ARM + 0.03，否则起飞段输出不线性、离地瞬间易抖动');
-    else add('SPIN_MIN ↔ SPIN_ARM', `${mn} / ${ar}`, 'ok', '怠速与飞行最小输出之间留有 0.03 以上裕度');
-  } else add('SPIN_MIN ↔ SPIN_ARM', '--', 'na', '缺 MOT_SPIN_MIN 或 MOT_SPIN_ARM，跳过');
-
-  // PWM 行程
-  if (tcHas('MOT_PWM_MIN') && tcHas('MOT_PWM_MAX')) {
-    const lo = tcNum('MOT_PWM_MIN');
-    const hi = tcNum('MOT_PWM_MAX');
-    const span = hi - lo;
-    if (span < 300) add('MOT_PWM_MIN~MAX', `${lo}~${hi}us`, 'warn', `行程仅 ${span}us，过窄，油门分辨率与线性度都会变差`);
-    else if (lo === 1000 && hi === 2000) add('MOT_PWM_MIN~MAX', `${lo}~${hi}us`, 'ok', '标准行程，与电调行程校准一致');
-    else add('MOT_PWM_MIN~MAX', `${lo}~${hi}us`, 'info', '非标准行程，请确认与电调校准后的实际行程一致');
-  } else add('MOT_PWM_MIN~MAX', '--', 'na', '未读到（部分固件用 SERVO1_MIN/MAX 表示输出行程）');
-
-  // 最大输出
-  if (!tcHas('MOT_SPIN_MAX')) {
-    add('MOT_SPIN_MAX', '--', 'na', '未读到该参数');
-  } else {
-    const v = tcNum('MOT_SPIN_MAX');
-    if (v > 1.0 || v < 0.5) add('MOT_SPIN_MAX', v, 'warn', '取值超出常规 0.5~1.0');
-    else if (v < 0.8) add('MOT_SPIN_MAX', v, 'info', `最大输出被限制为 ${v}，满油门以上无余量`);
-    else add('MOT_SPIN_MAX', v, 'ok', '取值正常');
-  }
-
+  const rows = window.ThrustCheck.buildRows(values, { escLinear: tcEscLinear() });
   const warns = rows.filter((r) => r.level === 'warn').length;
   const oks = rows.filter((r) => r.level === 'ok').length;
-  sumEl.textContent = warns ? `${warns} 项需关注 / 共 ${rows.length} 项` : `正常 ${oks}/${rows.length}`;
+  sumEl.textContent = (hasOverride ? '手填值 · ' : '')
+    + (warns ? `${warns} 项需关注 / 共 ${rows.length} 项` : `正常 ${oks}/${rows.length}`);
   sumEl.className = 'tc-summary ' + (warns ? 'bad' : 'good');
-  verdictEl.textContent = tcVerdict(rows);
+  verdictEl.textContent = window.ThrustCheck.verdict(rows, values);
 
   rowsEl.innerHTML = rows.map((r) => `
     <div class="tc-row ${r.level}">
@@ -851,14 +774,139 @@ function renderThrustCheck() {
       <span class="tc-val">${r.value}</span>
       <span class="tc-text">${r.text}</span>
     </div>`).join('');
+
+  drawTcCurve(values);
+  tcSyncInputs(values);
 }
 
-function setThrustCheckCollapsed(collapsed) {
-  document.getElementById('thrustCheck')?.classList.toggle('collapsed', collapsed);
-  const t = document.getElementById('tcToggle');
-  if (t) t.textContent = collapsed ? '展开 ▼' : '收起 ▲';
-  try { localStorage.setItem('tcCollapsed', collapsed ? '1' : '0'); } catch (e) { /* 忽略 */ }
+/** 曲线预览: 期望推力 -> 油门指令 (AP_Motors_Thrust_Linearization 公式) */
+function drawTcCurve(values) {
+  const cv = document.getElementById('tcCurve');
+  if (!cv || !cv.getContext) return;
+  const ctx = cv.getContext('2d');
+  const W = cv.width; const H = cv.height;
+  const pad = { l: 44, r: 12, t: 18, b: 26 };
+  const iw = W - pad.l - pad.r; const ih = H - pad.t - pad.b;
+  ctx.clearRect(0, 0, W, H);
+  const css = getComputedStyle(document.body);
+  const cs = (name, dft) => (css.getPropertyValue(name) || dft).trim();
+  const cText = cs('--text-secondary', '#8b949e');
+  const cGrid = cs('--border-color', '#30363d');
+  const cIdeal = cs('--text-muted', '#6e7681');
+  const cExpo = cs('--accent', '#58a6ff');
+  const cHover = cs('--success', '#3fb950');
+  const X = (t) => pad.l + t * iw;
+  const Y = (a) => pad.t + (1 - a) * ih;
+
+  // 网格 + 坐标
+  ctx.strokeStyle = cGrid; ctx.lineWidth = 1;
+  ctx.fillStyle = cText; ctx.font = '10px sans-serif';
+  for (let i = 0; i <= 4; i++) {
+    const g = i / 4;
+    ctx.beginPath(); ctx.moveTo(X(g), Y(0)); ctx.lineTo(X(g), Y(1)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(X(0), Y(g)); ctx.lineTo(X(1), Y(g)); ctx.stroke();
+    ctx.fillText((g * 100).toFixed(0) + '%', X(g) - 10, H - 9);
+    ctx.fillText((g * 100).toFixed(0) + '%', 6, Y(g) + 3);
+  }
+
+  // 理想线性 a=T
+  ctx.strokeStyle = cIdeal; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(1), Y(1)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 当前 EXPO 补偿曲线
+  const expo = Number(values.MOT_THST_EXPO) || 0;
+  const liftMax = values.MOT_THR_MAX !== undefined ? Number(values.MOT_THR_MAX) : 1;
+  const pts = window.ThrustCheck.curvePoints(expo, { steps: 60, liftMax });
+  ctx.strokeStyle = cExpo; ctx.lineWidth = 2;
+  ctx.beginPath();
+  pts.forEach((p, i) => { if (i === 0) ctx.moveTo(X(p.t), Y(p.a)); else ctx.lineTo(X(p.t), Y(p.a)); });
+  ctx.stroke();
+
+  // 悬停点: 油门指令 = MOT_THST_HOVER 处的期望推力
+  const hover = Number(values.MOT_THST_HOVER);
+  if (isFinite(hover) && hover >= 0 && hover <= 1) {
+    const tHover = window.ThrustCheck.actuatorToExpoThrust(hover, expo, liftMax);
+    ctx.fillStyle = cHover;
+    ctx.beginPath(); ctx.arc(X(tHover), Y(hover), 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillText('悬停', X(tHover) + 6, Y(hover) - 6);
+  }
+  ctx.fillStyle = cText;
+  ctx.fillText(`期望推力 → 油门指令 (EXPO=${expo})`, pad.l - 30, 11);
 }
+
+/** 手工输入框: 仅回填无手填覆盖的参数 */
+function tcSyncInputs(values) {
+  for (const n of window.ThrustCheck.TC_EDITABLE) {
+    const inp = document.querySelector(`#tcInputs input[data-p="${n}"]`);
+    if (!inp || tcOverrides[n] !== undefined) continue;
+    inp.value = values[n] !== undefined ? values[n] : '';
+  }
+}
+
+function buildTcInputs() {
+  const box = document.getElementById('tcInputs');
+  if (!box) return;
+  box.innerHTML = window.ThrustCheck.TC_EDITABLE.map((n) => `
+    <label class="tc-input-item" title="${n}">
+      <span>${n.replace('MOT_', '')}</span>
+      <input type="number" step="any" data-p="${n}" placeholder="--" />
+    </label>`).join('');
+}
+
+// 手动体检: 重新从飞控全量拉取 (param_value 事件会触发重渲染)
+document.getElementById('btnTcRead')?.addEventListener('click', () => {
+  if (!connected) { alert('请先连接飞控'); return; }
+  tcOverrides = {};
+  document.querySelectorAll('#tcInputs input').forEach((i) => { i.value = ''; });
+  requestParams();
+  scheduleThrustCheck(1500); // 兜底重渲染
+});
+
+// 用手工填写的假设值评估 (不写入飞控)
+document.getElementById('btnTcReval')?.addEventListener('click', () => {
+  const ov = {};
+  document.querySelectorAll('#tcInputs input').forEach((i) => {
+    const v = i.value.trim();
+    if (v !== '' && isFinite(Number(v))) ov[i.dataset.p] = Number(v);
+  });
+  tcOverrides = ov;
+  renderThrustCheck();
+});
+
+// 清除手填值, 回到飞控实读值
+document.getElementById('btnTcReset')?.addEventListener('click', () => {
+  tcOverrides = {};
+  document.querySelectorAll('#tcInputs input').forEach((i) => { i.value = ''; });
+  renderThrustCheck();
+});
+
+['tcEscLinear', 'otEsc'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('change', () => scheduleThrustCheck(0));
+});
+
+// AI 分析: 把体检数据发给服务器 AI 代理
+function tcAiAnalyze() {
+  const statusEl = document.getElementById('tcAiStatus');
+  const values = tcValues();
+  if (!Object.keys(values).length) {
+    if (statusEl) statusEl.textContent = '暂无体检数据: 请先读取参数或手工填写';
+    return;
+  }
+  const rows = window.ThrustCheck.buildRows(values, { escLinear: tcEscLinear() });
+  document.getElementById('btnTcAi').disabled = true;
+  if (statusEl) statusEl.textContent = '分析中...';
+  ws.send(JSON.stringify({
+    type: 'thrust_analyze',
+    firmware: firmware === 'px4' ? 'PX4' : 'ArduPilot',
+    manual: Object.keys(tcOverrides).length > 0,
+    values,
+    rows: rows.map((r) => ({ name: r.name, value: r.value, level: r.level, text: r.text })),
+    verdictText: window.ThrustCheck.verdict(rows, values),
+    inputs: { note: document.getElementById('tcAiNote')?.value || '' },
+  }));
+}
+document.getElementById('btnTcAi')?.addEventListener('click', tcAiAnalyze);
 
 // ==================== 搜索和过滤 ====================
 document.getElementById('paramSearch').addEventListener('input', renderParams);
@@ -901,6 +949,7 @@ function switchView(name) {
   });
   const map = {
     params: 'viewParams',
+    thrust: 'viewThrust',
     onetouch: 'viewOnetouch',
     backup: 'viewBackup',
     logs: 'viewLogs',
@@ -918,16 +967,7 @@ for (const t of document.querySelectorAll('.view-tab')) {
 }
 
 // ==================== 初始化 ====================
-const tcHeadEl = document.getElementById('tcHead');
-if (tcHeadEl) {
-  tcHeadEl.onclick = () => {
-    setThrustCheckCollapsed(!document.getElementById('thrustCheck').classList.contains('collapsed'));
-  };
-}
-document.getElementById('otEsc')?.addEventListener('change', () => scheduleThrustCheck(0));
-let tcCollapsed = false;
-try { tcCollapsed = localStorage.getItem('tcCollapsed') === '1'; } catch (e) { /* 忽略 */ }
-setThrustCheckCollapsed(tcCollapsed);
+buildTcInputs();
 renderThrustCheck();
 renderCategories();
 console.log('扶摇 FuyaoTune 前端已初始化');
