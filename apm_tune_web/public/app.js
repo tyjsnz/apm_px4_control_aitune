@@ -21,9 +21,12 @@ const PARAM_GROUPS = [
       { name: '*PSC_VELXY_P', desc: '水平速度环比例增益', unit: '', min: 1.0, max: 3.0, step: 0.1 },
       { name: 'PSC_VELXY_I', desc: '水平速度环积分增益', unit: '', min: 0.1, max: 2.0, step: 0.1 },
       { name: '*PSC_VELXY_FF', desc: '水平速度前馈', unit: '', min: 0.0, max: 1.0, step: 0.05 },
+      { name: '*PSC_POSZ_P', desc: '高度位置环P(高度迟缓/过冲先看)', unit: '', min: 0.1, max: 10.0, step: 0.1 },
+      { name: '*PSC_VELZ_P', desc: '高度速度环P', unit: '', min: 0.1, max: 3.0, step: 0.05 },
       { name: 'PSC_VELZ_FF', desc: '垂直速度前馈', unit: '', min: 0.0, max: 1.0, step: 0.05 },
       { name: 'PSC_ACCZ_P', desc: '垂直加速度环比例', unit: '', min: 0, max: 1.0, step: 0.01 },
       { name: 'PSC_ACCZ_I', desc: '垂直加速度环积分', unit: '', min: 0, max: 2.0, step: 0.01 },
+      { name: 'PSC_ACCZ_FF', desc: '垂直加速度前馈', unit: '', min: 0, max: 1.0, step: 0.05 },
     ]
   },
   {
@@ -39,6 +42,39 @@ const PARAM_GROUPS = [
       { name: 'MOT_PWM_MIN', desc: '电机输出最小PWM', unit: 'us', min: 750, max: 1250, step: 10 },
       { name: 'MOT_PWM_MAX', desc: '电机输出最大PWM', unit: 'us', min: 1750, max: 2250, step: 10 },
       { name: 'MOT_YAW_HEADROOM', desc: '偏航控制预留油门', unit: '', min: 0.0, max: 0.3, step: 0.01 },
+    ]
+  },
+  {
+    title: '姿态与速率环 ATC (调参主体)',
+    items: [
+      { name: '*ATC_ANG_RLL_P', desc: '横滚角度环P(角度误差→目标角速度)', unit: '', min: 3, max: 12, step: 0.1 },
+      { name: '*ATC_ANG_PIT_P', desc: '俯仰角度环P', unit: '', min: 3, max: 12, step: 0.1 },
+      { name: 'ATC_ANG_YAW_P', desc: '偏航角度环P', unit: '', min: 3, max: 12, step: 1 },
+      { name: '*ATC_RAT_RLL_P', desc: '横滚速率环P(全局振荡时下调)', unit: '', min: 0.01, max: 0.5, step: 0.005 },
+      { name: 'ATC_RAT_RLL_I', desc: '横滚速率环I', unit: '', min: 0.01, max: 2.0, step: 0.01 },
+      { name: 'ATC_RAT_RLL_D', desc: '横滚速率环D(高频抖动先降滤波)', unit: '', min: 0, max: 0.05, step: 0.001 },
+      { name: 'ATC_RAT_RLL_FF', desc: '横滚速率环前馈(跟随性差优先加)', unit: '', min: 0, max: 0.5, step: 0.001 },
+      { name: 'ATC_RAT_RLL_FLTT', desc: '横滚目标角速度滤波频率', unit: 'Hz', min: 5, max: 100, step: 1 },
+      { name: 'ATC_RAT_RLL_FLTD', desc: '横滚D项滤波频率', unit: 'Hz', min: 5, max: 100, step: 1 },
+      { name: '*ATC_RAT_PIT_P', desc: '俯仰速率环P', unit: '', min: 0.01, max: 0.5, step: 0.005 },
+      { name: 'ATC_RAT_PIT_I', desc: '俯仰速率环I', unit: '', min: 0.01, max: 2.0, step: 0.01 },
+      { name: 'ATC_RAT_PIT_D', desc: '俯仰速率环D', unit: '', min: 0, max: 0.05, step: 0.001 },
+      { name: 'ATC_RAT_PIT_FF', desc: '俯仰速率环前馈', unit: '', min: 0, max: 0.5, step: 0.001 },
+      { name: 'ATC_RAT_PIT_FLTT', desc: '俯仰目标角速度滤波频率', unit: 'Hz', min: 5, max: 100, step: 1 },
+      { name: 'ATC_RAT_PIT_FLTD', desc: '俯仰D项滤波频率', unit: 'Hz', min: 5, max: 100, step: 1 },
+      { name: '*ATC_RAT_YAW_P', desc: '偏航速率环P(转向无力/打滑优先加)', unit: '', min: 0.1, max: 2.5, step: 0.005 },
+      { name: 'ATC_RAT_YAW_I', desc: '偏航速率环I', unit: '', min: 0.01, max: 1.0, step: 0.01 },
+      { name: 'ATC_RAT_YAW_D', desc: '偏航速率环D(通常保持0)', unit: '', min: 0, max: 0.02, step: 0.001 },
+      { name: 'ATC_RAT_YAW_FF', desc: '偏航速率环前馈', unit: '', min: 0, max: 0.5, step: 0.001 },
+      { name: 'ATC_RAT_YAW_FLTT', desc: '偏航目标角速度滤波频率', unit: 'Hz', min: 1, max: 50, step: 1 },
+      { name: 'ATC_RAT_YAW_FLTE', desc: '偏航误差滤波频率(偏航抖动可下调)', unit: 'Hz', min: 0, max: 20, step: 1 },
+      { name: '*ATC_RAT_RLL_MAX', desc: '横滚最大角速度', unit: 'deg/s', min: 0, max: 500, step: 5 },
+      { name: '*ATC_RAT_PIT_MAX', desc: '俯仰最大角速度', unit: 'deg/s', min: 0, max: 500, step: 5 },
+      { name: '*ATC_RAT_YAW_MAX', desc: '偏航最大角速度', unit: 'deg/s', min: 0, max: 500, step: 5 },
+      { name: 'ATC_ACCEL_RLL_PIT_MAX', desc: '倾转角加速度上限(过小动作肉)', unit: 'deg/s²', min: 10, max: 1000, step: 10 },
+      { name: 'ATC_ACCEL_Y_MAX', desc: '偏航角加速度上限', unit: 'deg/s²', min: 10, max: 1000, step: 10 },
+      { name: 'ATC_THR_MIX_MIN', desc: '油门优先下限(姿态让位油门的程度)', unit: '', min: 0.1, max: 0.25, step: 0.01 },
+      { name: 'ATC_THR_MIX_MAX', desc: '油门优先上限', unit: '', min: 0.5, max: 0.9, step: 0.01 },
     ]
   },
   {
@@ -64,11 +100,23 @@ const PARAM_GROUPS = [
     ]
   },
   {
+    title: '电池计量与压降补偿',
+    items: [
+      { name: 'BATT_CAPACITY', desc: '电池容量(-1=自动识别)', unit: 'mAh', min: -1, max: 100000, step: 50 },
+      { name: 'BATT_AMP_PERVLT', desc: '电流计比例(电压读数→安培)', unit: 'A/V', min: 1, max: 1000, step: 1 },
+      { name: 'BATT_VOLT_MULT', desc: '电压计倍率(分压校准)', unit: '', min: 0, max: 10, step: 0.05 },
+      { name: 'MOT_BAT_VOLT_MAX', desc: '压降补偿满电电压(0=关闭补偿)', unit: 'V', min: 6, max: 53, step: 0.1 },
+      { name: 'MOT_BAT_VOLT_MIN', desc: '压降补偿低电电压', unit: 'V', min: 6, max: 42, step: 0.1 },
+      { name: 'MOT_BATT_CURR_MAX', desc: '最大电流限制(0=不限)', unit: 'A', min: 0, max: 300, step: 1 },
+    ]
+  },
+  {
     title: '安全保护',
     items: [
       { name: '*FS_GCS_ENABLE', desc: '地面站失联保护', unit: '', min: 0, max: 2, step: 1 },
       { name: 'FS_GCS_TIMEOUT', desc: 'GCS失联超时', unit: 's', min: 1, max: 30, step: 1 },
-      { name: 'FS_THR_VALUE', desc: '油门失联保护阈值', unit: '', min: 0, max: 1000, step: 10 },
+      { name: '*FS_THR_ENABLE', desc: '油门失控保护(0禁用/1返航/2降落/3智能返航/4智能返航或降落)', unit: '', min: 0, max: 4, step: 1 },
+      { name: 'FS_THR_VALUE', desc: '油门失联保护阈值', unit: '', min: 880, max: 975, step: 1 },
       { name: '*FENCE_ENABLE', desc: '地理围栏使能', unit: '', min: 0, max: 1, step: 1 },
       { name: 'FENCE_TYPE', desc: '围栏类型', unit: '', min: 0, max: 3, step: 1 },
       { name: '*FENCE_ALT_MAX', desc: '地理围栏最大高度', unit: 'm', min: 5, max: 120, step: 5 },
@@ -96,7 +144,11 @@ const PARAM_GROUPS = [
       { name: 'INS_GYRO_FILTER', desc: '陀螺仪低通滤波', unit: 'Hz', min: 10, max: 200, step: 5 },
       { name: 'INS_ACCEL_FILTER', desc: '加速度计低通滤波', unit: 'Hz', min: 5, max: 50, step: 1 },
       { name: 'INS_HNTCH_ENABLE', desc: '谐波陷波使能', unit: '', min: 0, max: 1, step: 1 },
-      { name: 'INS_HNTCH_MODE', desc: '陷波工作模式', unit: '', min: 0, max: 3, step: 1 },
+      { name: 'INS_HNTCH_MODE', desc: '陷波模式(0静态/1节流/2陀螺动态/3FFT)', unit: '', min: 0, max: 3, step: 1 },
+      { name: 'INS_HNTCH_FREQ', desc: '陷波中心频率(静态模式必填)', unit: 'Hz', min: 10, max: 495, step: 1 },
+      { name: 'INS_HNTCH_REF', desc: '节流参考值(节流模式,自学习后读取)', unit: '', min: 0, max: 1, step: 0.01 },
+      { name: 'INS_HNTCH_HARMICS', desc: '谐波集合(位掩码:1/2/4/8阶,1+2阶=3)', unit: '', min: 1, max: 15, step: 1 },
+      { name: 'INS_HNTCH_BW', desc: '陷波带宽', unit: 'Hz', min: 5, max: 250, step: 1 },
     ]
   },
 ];
@@ -159,6 +211,19 @@ const PX4_PARAM_GROUPS = [
     ]
   },
   {
+    title: '位置环 MPC (XY/Z P-I-D, v1.14)',
+    items: [
+      { name: '*MPC_XY_P', desc: '水平位置环P(0.95=默认)', unit: '', min: 0, max: 2.0, step: 0.05 },
+      { name: '*MPC_XY_VEL_P_ACC', desc: '水平速度环P(1.8=默认)', unit: '', min: 1.2, max: 5.0, step: 0.05 },
+      { name: 'MPC_XY_VEL_I_ACC', desc: '水平速度环I(0.4=默认,抗风稳态)', unit: '', min: 0, max: 60, step: 0.05 },
+      { name: 'MPC_XY_VEL_D_ACC', desc: '水平速度环D(0.2=默认)', unit: '', min: 0.1, max: 2.0, step: 0.05 },
+      { name: '*MPC_Z_P', desc: '垂直位置环P(1.0=默认)', unit: '', min: 0, max: 1.5, step: 0.05 },
+      { name: '*MPC_Z_VEL_P_ACC', desc: '垂直速度环P(4.0=默认)', unit: '', min: 2.0, max: 15.0, step: 0.1 },
+      { name: 'MPC_Z_VEL_I_ACC', desc: '垂直速度环I(2.0=默认,兼悬停油门学习)', unit: '', min: 0.2, max: 3.0, step: 0.05 },
+      { name: 'MPC_Z_VEL_D_ACC', desc: '垂直速度环D(0.0=默认)', unit: '', min: 0, max: 2.0, step: 0.05 },
+    ]
+  },
+  {
     title: '状态估计 EKF2',
     items: [
       { name: 'EKF2_GYR_NOISE', desc: '陀螺噪声(0.015=默认)', unit: 'rad/s', min: 0.0001, max: 0.1, step: 0.001 },
@@ -173,6 +238,9 @@ const PX4_PARAM_GROUPS = [
     title: '传感器与输出',
     items: [
       { name: '*IMU_GYRO_CUTOFF', desc: '陀螺低通滤波(40=默认,0=关闭)', unit: 'Hz', min: 0, max: 1000, step: 5 },
+      { name: 'IMU_DGYRO_CUTOFF', desc: 'D项滤波(30=默认,0=关闭)', unit: 'Hz', min: 0, max: 1000, step: 5 },
+      { name: 'IMU_GYRO_NF0_FRQ', desc: '陷波中心频率(0=禁用)', unit: 'Hz', min: 0, max: 1000, step: 1 },
+      { name: 'IMU_GYRO_NF0_BW', desc: '陷波带宽(20=默认)', unit: 'Hz', min: 0, max: 100, step: 1 },
       { name: 'IMU_ACCEL_CUTOFF', desc: '加计低通滤波(30=默认,0=关闭)', unit: 'Hz', min: 0, max: 1000, step: 5 },
       { name: 'IMU_GYRO_RATEMAX', desc: '速率环数据频率(400=默认)', unit: 'Hz', min: 100, max: 2000, step: 100 },
     ]
