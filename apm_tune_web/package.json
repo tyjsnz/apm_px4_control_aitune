@@ -1,7 +1,7 @@
 {
   "name": "apm-tune-web",
   "version": "1.0.0",
-  "description": "APM/ArduPilot tuning web interface over MAVLink serial",
+  "description": "APM/ArduPilot tuning web interface — browser connects the FC via Web Serial; server provides AI proxy & storage",
   "type": "module",
   "main": "server.js",
   "bin": {
@@ -25,7 +25,9 @@
   "license": "MIT",
   "dependencies": {
     "express": "^4.21.2",
-    "serialport": "^12.0.0",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "serialport": "^12.0.0"
   }
 }

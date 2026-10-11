@@ -102,8 +102,8 @@ const PARAM_GROUPS = [
 ];
 
 // ==================== 状态管理 ====================
-const WS_PROTO = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss:' : 'ws:';
-const ws = new WebSocket(`${WS_PROTO}//${location.host}`);
+// ws 由 fclink.js 提供: Web Serial 直连飞控 + 服务器 WS (AI/故障/文件) 的统一传输层
+const ws = window.ws;
 let paramCache = {};       // { paramId: value }
 let currentCategory = 0;
 let connected = false;
@@ -111,7 +111,7 @@ let connectedPort = null;
 
 // ==================== 串口连接 ====================
 function refreshPorts() {
-  if (ws.readyState !== WebSocket.OPEN) return;
+  if (ws.readyState !== 1) return;   // 传输层就绪即可 (串口列表为浏览器本地处理)
   ws.send(JSON.stringify({ type: 'list_ports' }));
 }
 
@@ -127,6 +127,12 @@ function updatePortList(ports) {
   for (const p of ports) {
     const opt = document.createElement('option');
     opt.value = p.path;
+    if (p.path === 'webserial:pick') {
+      // 选择新串口: 点击后弹出系统授权对话框
+      opt.textContent = p.manufacturer || '选择新串口…';
+      sel.appendChild(opt);
+      continue;
+    }
     let label = p.path;
     if (p.manufacturer) label += ` (${p.manufacturer})`;
     if (p.serialNumber) label += ` [${p.serialNumber}]`;
@@ -145,11 +151,18 @@ function updatePortList(ports) {
   }
 }
 
-function connect() {
-  const path = document.getElementById('portSelect').value;
-  const baud = document.getElementById('baudInput').value;
-  if (!path) return alert('请选择串口');
-  ws.send(JSON.stringify({ type: 'connect', path, baud: parseInt(baud) }));
+async function connect() {
+  const sel = document.getElementById('portSelect').value;
+  const baud = parseInt(document.getElementById('baudInput').value);
+  if (!sel) return alert('请选择串口');
+  let path = sel;
+  if (sel === 'webserial:pick') {
+    // Web Serial: 必须在用户手势内同步弹出授权对话框 (由 fclink.js 处理)
+    if (!FcSerial.supported()) {
+      return alert('当前浏览器不支持 Web Serial，请使用 Chrome / Edge 浏览器');
+    }
+  }
+  ws.send(JSON.stringify({ type: 'connect', path, baud }));
 }
 
 function disconnect() {
@@ -770,3 +783,11 @@ setThrustCheckCollapsed(tcCollapsed);
 renderThrustCheck();
 renderCategories();
 console.log('AP Tune 前端已初始化');
+
+// Web Serial 支持检测 (Firefox/Safari 不支持; 非安全上下文下 navigator.serial 也不存在)
+if (typeof FcSerial !== 'undefined' && !FcSerial.supported()) {
+  document.getElementById('status').textContent = '浏览器不支持 Web Serial';
+  document.getElementById('status').className = 'status-badge disconnected';
+  document.getElementById('btnConnect').disabled = true;
+  console.warn('当前浏览器不支持 Web Serial，请使用 Chrome / Edge (并通过 HTTPS 或 localhost 访问)');
+}

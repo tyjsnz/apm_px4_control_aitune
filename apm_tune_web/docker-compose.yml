@@ -1,0 +1,43 @@
+# AP Tune 服务器部署
+#   基础启动:  docker compose up -d --build          → http://服务器IP:3000
+#   启用 HTTPS (Web Serial 需要安全上下文, 公网部署必须):  见下方 caddy profile
+#
+# 环境变量 (写入 .env 或直接 export):
+#   AUTH_USER / AUTH_PASS   HTTP Basic 认证账号密码 (公网强烈建议设置)
+#   APM_DOMAIN              使用 tls profile 时的访问域名/IP
+services:
+  apm-tune:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - AUTH_USER=${AUTH_USER:-}
+      - AUTH_PASS=${AUTH_PASS:-}
+    volumes:
+      - ./backups:/app/backups      # 参数备份
+      - ./logs:/app/logs            # 下载的飞行日志
+      - ./faults:/app/faults        # 故障速查记录
+      - ./config:/app/config        # AI 配置(含 Key, 注意权限)
+    restart: unless-stopped
+
+  # HTTPS 反代 (Web Serial 要求 HTTPS 或 localhost):
+  #   APM_DOMAIN=你的域名 docker compose --profile tls up -d
+  caddy:
+    profiles: ["tls"]
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - APM_DOMAIN=${APM_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - apm-tune
+    restart: unless-stopped
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

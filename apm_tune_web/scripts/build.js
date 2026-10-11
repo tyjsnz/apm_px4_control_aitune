@@ -86,15 +86,17 @@ function makeLauncher(kind, target) {
 
 const README = `AP Tune（APM/ArduPilot 调参 & 日志分析 Web 工具）— 便携版
 ========================================================
-1. 把飞控用 USB 连接到本机（运行本程序的电脑）。
+1. 电脑用 USB 连接飞控（无需驱动串口服务, 串口由浏览器 Web Serial 直连）。
 2. 运行启动器:
    - Windows: 双击 start.bat
    - macOS:   双击 start.command（如被拦截: 右键→打开，或系统设置里允许）
    - Linux:   ./start.sh
 3. 会自动打开浏览器 http://localhost:3000 ；若没自动打开，手动访问该地址。
-4. 关闭: 关掉弹出的命令行窗口即可。
+4. 页面里选择串口并连接（首次会弹出浏览器授权对话框）。
+5. 关闭: 关掉弹出的命令行窗口即可。
 
 说明:
+- 浏览器要求 Chrome / Edge（桌面版, Web Serial 仅 Chromium 系支持）。
 - 已内置 Node 运行时，无需另外安装 Node。
 - 数据目录: backups/(参数备份, 需自行备份)   logs/(下载的飞行日志)。
 - 端口被占用时会启动失败；可编辑启动器，在命令后加 --port 3001 之类（或在命令前设置 PORT 环境变量）。
@@ -122,7 +124,7 @@ async function buildTarget(target) {
   copyDir(runtimeSrc, path.join(pkgDir, 'runtime'));
   console.log('  Node 运行时已就绪');
 
-  // 2. 生产依赖 (不跑编译脚本, serialport 用自带 prebuilds)
+  // 2. 生产依赖 (只有 express + ws, 纯 JS; serialport 为开发依赖不打包)
   const staging = path.join(CACHE, 'staging');
   rmrf(staging);
   fs.mkdirSync(staging, { recursive: true });
