@@ -1,8 +1,23 @@
 // 一键首飞前端: 方案生成 / 体检读取 / 一键写入 / 校准 / 拆桨实测 / 帮助
 // 方案派生逻辑移植自 docs/ai_pid_tune.py::_ot_stages (由 test/golden 比对保证一致)
 (function () {
-  const D = window.OT_DATA || {};
-  const STAGE_ORDER = D.stageOrder || [];
+  const AP_D = window.OT_DATA || {};
+  const AP_STAGE_ORDER = AP_D.stageOrder || [];
+
+  // ---------- 固件派发 (ArduPilot / PX4) ----------
+  const isPx4 = () => (typeof window.getFirmwareType === 'function'
+    && window.getFirmwareType() === 'px4'
+    && !!(window.PX4OneTouch && window.PX4_OT_DATA));
+
+  /** 当前固件的数据源; PX4 数据缺失的键回退 AP 数据 (如 stageOrder 复用) */
+  function dget(key) {
+    const px4 = isPx4() ? window.PX4_OT_DATA : null;
+    if (px4 && px4[key] !== undefined) return px4[key];
+    return AP_D[key];
+  }
+
+  /** 当前固件的阶段表 (PX4 复用 AP 的 stage ID, 以便复用同一套 UI) */
+  const stageOrder = () => dget('stageOrder') || AP_STAGE_ORDER;
 
   // ---------- 数值工具 (对齐 Python) ----------
   const r = (x, n) => {
@@ -19,16 +34,17 @@
   const PROF_NAME = { soft: '更保守', std: '标准', hot: '更激进' };
 
   function sizeProfile(size) {
+    const sizes = dget('sizes') || AP_D.sizes;
     let s = Math.round(Number(size));
     if (!isFinite(s)) s = 5;
-    const keys = Object.keys(D.sizes).map(Number);
+    const keys = Object.keys(sizes).map(Number);
     let best = keys[0];
     for (const k of keys) {
       if (Math.abs(k - s) < Math.abs(best - s) || (Math.abs(k - s) === Math.abs(best - s) && k < best)) {
         best = k;
       }
     }
-    return D.sizes[String(best)];
+    return sizes[String(best)];
   }
 
   function mk(name, value, unit, rng, desc, help, aliases, check) {
@@ -43,13 +59,13 @@
     const hover = parseFloat(ctx.hover);
     const hoverV = isFinite(hover) ? hover : 0.25;
     const escLinear = !!ctx.escLinear;
-    const purpose = Object.prototype.hasOwnProperty.call(D.purposes, ctx.purpose) ? ctx.purpose : 'first';
+    const purpose = Object.prototype.hasOwnProperty.call(AP_D.purposes, ctx.purpose) ? ctx.purpose : 'first';
     const profKey = ctx.profile || 'std';
-    const q = D.profiles[profKey] || D.profiles.std;
+    const q = AP_D.profiles[profKey] || AP_D.profiles.std;
     let tk;
-    if (purpose === 'auto') tk = D.autoProfiles[profKey] || D.autoProfiles.std;
-    else if (purpose === 'guided') tk = D.trackProfiles[profKey] || D.trackProfiles.std;
-    else tk = D.trackFirst;
+    if (purpose === 'auto') tk = AP_D.autoProfiles[profKey] || AP_D.autoProfiles.std;
+    else if (purpose === 'guided') tk = AP_D.trackProfiles[profKey] || AP_D.trackProfiles.std;
+    else tk = AP_D.trackFirst;
     const auto = purpose === 'auto';
     const v_up = auto ? tk.speed_up : q.speed_up;
     const v_accz = auto ? tk.accel_z : q.accel_z;
@@ -60,7 +76,7 @@
     const gyro = Math.round(parseFloat(ctx.gyro || p.gyro));
     const gyroSrc = ctx.gyro ? '读取值' : '按尺寸推荐值';
     const half = Math.max(5, Math.min(100, Math.round(gyro / 2.0)));
-    const purposeCn = D.purposes[purpose];
+    const purposeCn = AP_D.purposes[purpose];
     const st = {};
 
     st.battery = [
@@ -366,10 +382,23 @@
       ]);
     }
 
-    return STAGE_ORDER.map(([sid, label]) => ({ id: sid, label, items: st[sid] || [] }));
+    return stageOrder().map(([sid, label]) => ({ id: sid, label, items: st[sid] || [] }));
   }
 
-  // ---------- 交叉校验 (移植 _ot_validate) ----------
+  // ---------- 固件派发: PX4 方案在 onetouch_px4.js 中实现 ----------
+  function stagesFor(ctx) {
+    if (isPx4() && window.PX4OneTouch.otStages) return window.PX4OneTouch.otStages(ctx);
+    return otStages(ctx);
+  }
+
+  function validateFor(rows) {
+    if (isPx4() && window.PX4OneTouch.otValidate) return window.PX4OneTouch.otValidate(rows);
+    return otValidate(rows);
+  }
+
+  window.OneTouchCore = { otStages, otValidate, stagesFor, validateFor, sizeProfile, r, gz, isPx4 };
+
+  // ---------- 交叉校验 (移植 _ot_validate, ArduPilot 专属) ----------
   function otValidate(rows) {
     const issues = [];
     const values = {};
@@ -418,8 +447,6 @@
     }
     return issues;
   }
-
-  window.OneTouchCore = { otStages, otValidate, sizeProfile, r, gz };
 
   // ================= UI =================
   const $ = (id) => document.getElementById(id);
@@ -512,12 +539,16 @@
     if (!isFinite(hover)) hover = 0.25;
     hover = Math.max(0.125, Math.min(0.6875, hover));
     const purposeCn = $('otPurpose').value;
+    const purposes = dget('purposes') || {};
     let purpose = 'first';
-    for (const [k, v] of Object.entries(D.purposes)) if (v === purposeCn) purpose = k;
+    for (const [k, v] of Object.entries(purposes)) if (v === purposeCn) purpose = k;
     const profileCn = $('otProfile').value;
     const profile = { '更保守': 'soft', '标准': 'std', '更激进': 'hot' }[profileCn] || 'std';
+    // ArduPilot 用 INS_GYRO_FILTER, PX4 用 IMU_GYRO_CUTOFF
     const gyroParam = (typeof paramCache !== 'undefined' && paramCache)
-      ? paramCache.INS_GYRO_FILTER : undefined;
+      ? (paramCache.INS_GYRO_FILTER !== undefined
+        ? paramCache.INS_GYRO_FILTER : paramCache.IMU_GYRO_CUTOFF)
+      : undefined;
     const ctx = { size, cells, hover, escLinear: $('otEsc').checked, purpose, profile };
     if (gyroParam !== undefined) ctx.gyro = gyroParam;
     return ctx;
@@ -541,7 +572,7 @@
   function buildStagesUI() {
     const box = $('otStages');
     box.innerHTML = '';
-    for (const [sid, label] of STAGE_ORDER) {
+    for (const [sid, label] of stageOrder()) {
       const lab = document.createElement('label');
       lab.className = 'ot-stage';
       const cb = document.createElement('input');
@@ -558,7 +589,7 @@
   function generatePlan() {
     const ctx = getCtx();
     const rows = [];
-    for (const st of otStages(ctx)) {
+    for (const st of stagesFor(ctx)) {
       if (!stageEnabled(st.id)) continue;
       for (const e of st.items) {
         rows.push({
@@ -572,11 +603,25 @@
     state.readDone = false;
     renderTable();
     const nchk = rows.filter((r) => r.check).length;
-    const ctxTxt = `用途 ${D.purposes[ctx.purpose]} / 桨径 ${ctx.size}寸 / ${ctx.cells}S / `
+    const purposeCn = (dget('purposes') || {})[ctx.purpose] || ctx.purpose;
+    const ctxTxt = `用途 ${purposeCn} / 桨径 ${ctx.size}寸 / ${ctx.cells}S / `
       + `悬停油门 ${Number(ctx.hover).toFixed(3)} / 档位 ${PROF_NAME[ctx.profile]}`
       + (ctx.escLinear ? ' / 电调已线性化' : '');
     const lines = [`已生成 ${rows.length} 项方案 (勾选 ${nchk} 项) — ${ctxTxt}`];
-    if (ctx.purpose === 'first') {
+    if (isPx4()) {
+      if (ctx.purpose === 'first') {
+        lines.push('  ▸ PX4 首飞: 速度/加速度已取保守值; 第 6 阶段(EKF2)与安全项默认按推荐勾选。');
+        lines.push('  ▸ 写入前请先在 QGC 完成 传感器校准(加速度计六面/罗盘/气压) 与 遥控器校准。');
+        lines.push('  ▸ 参数为 v1.14+ 命名(如 MC_ROLLRATE_P/I/D/K); 老固件若读不到请先升级。');
+      } else if (ctx.purpose === 'guided') {
+        lines.push('  ▸ Offboard 外部引导: 速度/加速度/Jerk 按追踪目标放开; 位置环 MPC_ACC_HOR 为主。');
+        lines.push('  ▸ 追不上 → 升 MPC_ACC_HOR / MPC_JERK; 来回摆 → 降这两项。');
+        lines.push('  ▸ 围栏 GF_MAX_H_DIST 必须 ≥ 实际追踪作业半径。');
+      } else {
+        lines.push('  ▸ AUTO 任务: MPC_XY_CRUISE/ACC_HOR 按任务取值, NAV_ACC_RAD 到点半径一并体检。');
+        lines.push('  ▸ 跑不满速度 → 升 MPC_XY_CRUISE + MPC_ACC_HOR; 航点"到不了" → 升 NAV_ACC_RAD。');
+      }
+    } else if (ctx.purpose === 'first') {
       lines.push('  ▸ 首飞模式: 第 4 阶段(水平导航)与第 7 阶段(EKF)只展示、默认不勾选。');
       lines.push('  ▸ 首飞悬停稳定后，把"用途"切到「GUIDED 外部引导追踪」或「AUTO 任务航点」重新生成方案。');
     } else if (ctx.purpose === 'guided') {
@@ -589,7 +634,9 @@
       lines.push('  ▸ 机上调参: TUNE=10 + 某通道 RCx_OPTION=219，可旋钮实时改 WPNAV_SPEED。');
       lines.push('  ▸ 第 7 阶段数据源 7 项仅体检确认(GPS=3/气压=1/罗盘=1)，默认不勾选。');
     }
-    lines.push('  下一步: ② 读取当前值体检 → ③ 一键写入(自动备份)');
+    lines.push(isPx4()
+      ? '  下一步: ② 读取当前值体检 → ③ 一键写入(自动备份) → 确认 QGC 校准完成 → 装桨试飞'
+      : '  下一步: ② 读取当前值体检 → ③ 一键写入(自动备份)');
     report(lines.join('\n'), true);
     updateButtons();
   }
@@ -682,12 +729,24 @@
     const connected = state.connected;
     const hasRows = state.rows.length > 0;
     const busy = busyOp();
+    const px4 = isPx4();   // PX4: 六面向导/拆桨实测/水平校准 由 QGC 完成
     $('otBtnPlan').disabled = busy;
     $('otBtnRead').disabled = !connected || !hasRows || busy;
     $('otBtnWrite').disabled = !connected || !hasRows || busy;
-    for (const k of Object.keys(CAL_INFO)) $(CAL_INFO[k].btn).disabled = !connected || busy;
-    $(ACCEL_BTN).disabled = !connected || busy;
-    $(SPIN_BTN).disabled = !connected || busy;
+    for (const k of Object.keys(CAL_INFO)) {
+      $(CAL_INFO[k].btn).disabled = !connected || busy || (px4 && k === 'level');
+      if (px4 && k === 'level') $(CAL_INFO[k].btn).title = 'PX4 无独立水平校准, 请用 QGC';
+      else $(CAL_INFO[k].btn).title = '';
+    }
+    $(ACCEL_BTN).disabled = !connected || busy || px4;
+    $(SPIN_BTN).disabled = !connected || busy || px4;
+    if (px4) {
+      $(ACCEL_BTN).title = 'PX4 六面校准请使用 QGroundControl';
+      $(SPIN_BTN).title = 'PX4 拆桨实测请使用 QGC 电机测试';
+    } else {
+      $(ACCEL_BTN).title = '';
+      $(SPIN_BTN).title = '';
+    }
 
     const label = busyText();
     $('otStatus').textContent = connected ? (label || '已连接') : '未连接';
@@ -734,7 +793,9 @@
       lines.push(`  实测电压 ${Number(msg.volt).toFixed(2)}V → 推算 ${cells}S`
         + (cells === inputCells ? '' : `  (与当前输入 ${inputCells}S 不一致，请核对)`));
     }
-    if (miss) lines.push('  ⚠ 读不到的项多为 4.7 改名或该机未启用，已自动尝试新旧两套参数名');
+    if (miss) lines.push(isPx4()
+      ? '  ⚠ 读不到的项可能是该固件版本不存在/已更名的参数, 写入时会自动跳过失败项'
+      : '  ⚠ 读不到的项多为 4.7 改名或该机未启用，已自动尝试新旧两套参数名');
     lines.push('  下一步: 拆桨实测起转 → ③ 一键写入 → 重启飞控 → 装桨试飞');
     report(lines.join('\n'), true);
     updateButtons();
@@ -755,14 +816,14 @@
       return true;
     });
     if (!pending.length) { alert('没有需要写入的参数（未勾选或已与推荐值一致）'); return; }
-    const issues = otValidate(pending);
+    const issues = validateFor(pending);
     if (issues.length) {
       if (!confirm('参数校验未通过:\n' + issues.join('\n') + '\n\n仍要写入吗？（不推荐）')) return;
     }
     const byStage = {};
     for (const row of pending) (byStage[row.stage] = byStage[row.stage] || []).push(row);
     const listing = [];
-    for (const [, label] of STAGE_ORDER) {
+    for (const [, label] of stageOrder()) {
       if (!byStage[label]) continue;
       listing.push(`【${label}】`);
       for (const row of byStage[label]) {
@@ -803,7 +864,11 @@
       updateButtons();
       return;
     }
-    const nxt = state.nextPurpose === 'guided'
+    const nxt = isPx4()
+      ? ('  建议: 重启飞控(QGC/本工具) → 传感器校准确认 → 装桨 → Position Hold 悬停 3m\n'
+        + '  → 检查 EKF2/EKF 新息与振动(日志页解析 .ulg) → 再飞高/试任务\n'
+        + '  → 追不上升 MPC_ACC_HOR / MPC_JERK，来回摆降它们或位置环设定')
+      : state.nextPurpose === 'guided'
       ? ('  追踪验证: 重启飞控 → 起飞 3m 切 GUIDED → 先发静止目标(纯位置) →\n'
         + '  再开位置+速度前馈(10~20Hz) → 确认无超调后再追移动目标 →\n'
         + '  追不上升 WPNAV_ACCEL/JERK，来回摆降它们或 PSC_POSXY_P')
@@ -1081,7 +1146,7 @@
   }
 
   function showHelp() {
-    const data = parseHelp(D.help || '');
+    const data = parseHelp(dget('help') || '');
     const modal = document.createElement('div');
     modal.className = 'ot-modal ot-help-modal';
     modal.innerHTML = `
@@ -1217,12 +1282,34 @@
     $('otSpin').onclick = doSpinTest;
     $('otPurpose').addEventListener('change', () => {
       const ctx = getCtx();
-      if (ctx.purpose === 'guided') report('用途=GUIDED 外部引导追踪 → 第 4 阶段水平导航参数将按推荐值勾选');
+      if (isPx4()) {
+        report(`用途=${(dget('purposes') || {})[ctx.purpose] || ctx.purpose} → 点击「① 生成方案」查看 PX4 推荐参数`);
+      } else if (ctx.purpose === 'guided') report('用途=GUIDED 外部引导追踪 → 第 4 阶段水平导航参数将按推荐值勾选');
       else if (ctx.purpose === 'auto') report('用途=AUTO 任务航点 → 第 4 阶段按任务取值勾选，并追加 15 项');
       else report('用途=首飞(安全保守) → 第 4 阶段仅展示、默认不勾选');
     });
     updateButtons();
     generatePlan();
+  }
+
+  /** 固件识别变化钩子 (app.js setFirmware 调用): 重建用途下拉/阶段勾选/方案模板 */
+  function onFirmwareChange() {
+    const purposes = dget('purposes') || {};
+    const sel = $('otPurpose');
+    if (sel) {
+      const labels = Object.values(purposes);
+      const cur = sel.value;
+      sel.innerHTML = '';
+      for (const t of labels) {
+        const opt = document.createElement('option');
+        opt.textContent = t;
+        sel.appendChild(opt);
+      }
+      if (labels.includes(cur)) sel.value = cur;
+    }
+    buildStagesUI();
+    generatePlan();
+    report(`已切换为 ${isPx4() ? 'PX4' : 'ArduPilot'} 方案模板 (阶段与用途已重建)`, false);
   }
 
   function setConnected(v) {
@@ -1231,6 +1318,6 @@
     updateButtons();
   }
 
-  window.OneTouch = { init, handleMessage, setConnected };
+  window.OneTouch = { init, handleMessage, setConnected, onFirmwareChange };
   if (typeof document !== 'undefined') window.OneTouch.init();
 })();

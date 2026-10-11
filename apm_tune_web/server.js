@@ -11,7 +11,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 
-import { analyzeLog, buildLogUserPrompt, LOG_SYSTEM_PROMPT, extractCharts } from './lib/loganalysis.js';
+import { analyzeLogAuto, buildLogUserPrompt, pickLogSystemPrompt, extractChartsAuto } from './lib/loganalysis.js';
 import { FAULT_SYSTEM_PROMPT, buildFaultUserPrompt } from './lib/faultai.js';
 import { createFaultStore } from './lib/faultstore.js';
 import { createAiConfigStore } from './lib/aiconfigstore.js';
@@ -119,9 +119,9 @@ app.get('/api/backups/:name', (req, res) => {
   fs.createReadStream(full).pipe(res);
 });
 
-// 保存下载的飞行日志 (浏览器端 FcOps.store.saveBin → POST /api/logs?name=xxx.bin)
+// 保存下载的飞行日志 (浏览器端 FcOps.store.saveBin → POST /api/logs?name=xxx.bin|.ulg)
 app.post('/api/logs', express.raw({ type: 'application/octet-stream', limit: '500mb' }), (req, res) => {
-  const file = safeName(req.query.name, /^[\w.-]+\.bin$/);
+  const file = safeName(req.query.name, /^[\w.-]+\.(bin|ulg)$/);
   if (!file) return res.status(400).json({ error: '非法日志文件名' });
   const data = req.body;
   if (!data || !data.length) return res.status(400).json({ error: '空日志数据' });
@@ -193,19 +193,21 @@ async function logAnalyze(ws, msg) {
   const metricsList = [];
   const usedFiles = [];
   const missing = [];
+  const formats = new Set();  // 'bin'(ArduPilot) / 'ulg'(PX4)
   for (const f of files) {
     const safe = path.basename(String(f || ''));
     const full = path.join(LOG_DIR, safe);
     if (!safe || !full.startsWith(LOG_DIR) || !fs.existsSync(full)) { missing.push(safe || String(f)); continue; }
     try {
       const buf = fs.readFileSync(full);
-      const s = analyzeLog(buf, { excerptRows: 30 });
+      const s = analyzeLogAuto(buf, { excerptRows: 30 });
+      formats.add(s.format);
       summaries.push(`########## 日志 ${safe} ##########\n${s.text}`);
       metricsList.push({ file: safe, metrics: s.metrics });
       usedFiles.push(safe);
       // 传感器时序曲线
       try {
-        const charts = extractCharts(buf, { maxPoints: 400 });
+        const charts = extractChartsAuto(buf, { maxPoints: 400 });
         send(ws, { type: 'log_charts', file: safe, charts });
       } catch (e) {
         send(ws, { type: 'log_charts', file: safe, charts: [], error: e.message });
@@ -235,12 +237,15 @@ async function logAnalyze(ws, msg) {
     return;
   }
   send(ws, { type: 'log_analyze_progress', stage: 'ai', file: title, files: usedFiles });
+  // 全部为 PX4 ULog 时用 PX4 专用提示词, 其余(含混合)用通用提示词
+  const system = (formats.size === 1 && formats.has('ulg'))
+    ? pickLogSystemPrompt('ulg') : pickLogSystemPrompt('bin');
   const r = await aiChat({
     provider: ai.provider,
     apiKey: ai.apiKey,
     model: ai.model,
     baseUrl: ai.baseUrl,
-    system: LOG_SYSTEM_PROMPT,
+    system,
     user: buildLogUserPrompt(title, combined),
     timeoutMs: 180000,
   });
@@ -276,7 +281,7 @@ function listLocalLogs() {
   if (!fs.existsSync(LOG_DIR)) return [];
   const out = [];
   for (const f of fs.readdirSync(LOG_DIR)) {
-    if (!f.endsWith('.bin')) continue;
+    if (!f.endsWith('.bin') && !f.endsWith('.ulg')) continue;
     const st = fs.statSync(path.join(LOG_DIR, f));
     out.push({ file: f, size: st.size, mtime: st.mtimeMs });
   }

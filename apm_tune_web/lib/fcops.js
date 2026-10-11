@@ -11,6 +11,29 @@ export const COPTER_MODES = [
   'FOLLOW', 'ZIGZAG', 'SYSTEMID', 'AUTOROTATE', 'AUTO_RTL',
 ];
 
+// ---------- PX4 (MAV_AUTOPILOT_PX4 = 12) ----------
+export const MAV_AUTOPILOT_PX4 = 12;
+
+// PX4 custom_mode: main_mode = bits 16-23, sub_mode = bits 24-31 (px4::custom_mode)
+export const PX4_MAIN_MODES = {
+  1: 'MANUAL', 2: 'ALTCTL', 3: 'POSCTL', 4: 'AUTO',
+  5: 'ACRO', 6: 'OFFBOARD', 7: 'STABILIZED', 8: 'RATTITUDE',
+};
+export const PX4_AUTO_SUB_MODES = {
+  1: 'READY', 2: 'TAKEOFF', 3: 'LOITER', 4: 'MISSION', 5: 'RTL',
+  6: 'LAND', 7: 'RESERVE', 8: 'FOLLOW', 9: 'PRECLAND',
+};
+
+/** 解码 PX4 HEARTBEAT custom_mode → 模式名 (如 "AUTO MISSION") */
+export function decodePx4CustomMode(customMode) {
+  const cm = Number(customMode) >>> 0;
+  const main = (cm >>> 16) & 0xff;
+  const sub = (cm >>> 24) & 0xff;
+  const mainName = PX4_MAIN_MODES[main] || ('MAIN' + main);
+  if (main === 4 && PX4_AUTO_SUB_MODES[sub]) return `AUTO ${PX4_AUTO_SUB_MODES[sub]}`;
+  return mainName;
+}
+
 export const ACCEL_POS_NAMES = {
   1: 'LEVEL 水平', 2: 'LEFT 左侧', 3: 'RIGHT 右侧',
   4: 'NOSEDOWN 机头朝下', 5: 'NOSEUP 机头朝上', 6: 'BACK 背面朝上',
@@ -46,6 +69,7 @@ export class FcOps {
     this.telemetry = {
       volt: null, cells: null, load: null,
       armed: false, mode: '--', autopilot: null,
+      firmware: null,   // 'apm' | 'px4' | null (由 HEARTBEAT.autopilot 判定)
       sysid: 1, compid: 1,
     };
     this.lastEsc = { rpm: null, t: 0 };
@@ -68,6 +92,7 @@ export class FcOps {
     this.telemetry.volt = null;
     this.telemetry.cells = null;
     this.telemetry.autopilot = null;
+    this.telemetry.firmware = null;
     this.link = new ParamLink({
       write: (buf) => { try { this.writeFn(buf); } catch (e) { /* ignore */ } },
       onMessage: (m) => this.handleMavlink(m),
@@ -93,6 +118,7 @@ export class FcOps {
     this.telemetry.volt = null;
     this.telemetry.armed = false;
     this.telemetry.autopilot = null;
+    this.telemetry.firmware = null;
     this.emit({ type: 'disconnected' });
   }
 
@@ -128,6 +154,21 @@ export class FcOps {
     return run;
   }
 
+  /**
+   * 写参数(带类型协商)。PX4 严格校验 PARAM_SET.param_type, 类型不符会静默忽略;
+   * 优先用飞控上报的类型, 未知类型时在 REAL32/INT32 间重试一次。
+   */
+  async setParamSmart(name, value, ptypeHint) {
+    const cache = this.paramCacheAll[name];
+    if (cache && cache.type) {
+      try { return await this.link.setParam(name, value, cache.type); } catch (e) { return false; }
+    }
+    const first = ptypeHint || 9; // REAL32
+    const alt = first === 9 ? 6 : 9;
+    try { if (await this.link.setParam(name, value, first)) return true; } catch (e) { /* 换类型重试 */ }
+    try { return await this.link.setParam(name, value, alt); } catch (e) { return false; }
+  }
+
   enqueueMsg(name, fields) {
     this.msgQueue.push({ name, fields });
     if (this.msgQueue.length > this.MSG_QUEUE_MAX) {
@@ -154,6 +195,7 @@ export class FcOps {
   }
 
   fcTypeName() {
+    if (this.telemetry.autopilot === MAV_AUTOPILOT_PX4) return 'PX4';
     return this.telemetry.autopilot === 3 ? 'APM_COPTER' : 'UNKNOWN';
   }
 
@@ -169,9 +211,13 @@ export class FcOps {
       case 'HEARTBEAT': {
         const f = m.fields;
         if (f.autopilot === 8) break; // 忽略其它 GCS
+        const prevFw = this.telemetry.firmware;
         t.autopilot = f.autopilot;
+        t.firmware = f.autopilot === MAV_AUTOPILOT_PX4 ? 'px4' : 'apm';
         t.armed = !!(f.base_mode & 0x80);
-        if (f.autopilot === 3 || f.autopilot === 0) {
+        if (t.firmware === 'px4') {
+          t.mode = decodePx4CustomMode(f.custom_mode);
+        } else if (f.autopilot === 3 || f.autopilot === 0) {
           t.mode = COPTER_MODES[f.custom_mode] || String(f.custom_mode);
         } else {
           t.mode = String(f.custom_mode);
@@ -181,10 +227,14 @@ export class FcOps {
           flightMode: t.mode,
           armed: t.armed,
           autopilot: f.autopilot,
+          firmware: t.firmware,
           mavType: f.type,
           baseMode: f.base_mode,
           customMode: f.custom_mode,
         });
+        if (prevFw !== t.firmware) {
+          this.log(`识别飞控固件: ${this.fcTypeName()} (autopilot=${f.autopilot})`);
+        }
         break;
       }
       case 'PARAM_VALUE': {
@@ -420,12 +470,9 @@ export class FcOps {
     for (let i = 0; i < total; i++) {
       const it = items[i];
       let ok = false;
-      // 优先用飞控上报的参数类型, 其次前端指定, 最后默认 REAL32
-      const ptype = it.paramType
-        || (this.paramCacheAll[it.name] && this.paramCacheAll[it.name].type)
-        || 9;
       try {
-        ok = await this.link.setParam(it.name, it.value, ptype);
+        // 类型协商: 优先飞控上报类型, 失败时 REAL32/INT32 重试 (PX4 严格校验类型)
+        ok = await this.setParamSmart(it.name, it.value, it.paramType);
       } catch (err) {
         ok = false;
       }
@@ -443,9 +490,20 @@ export class FcOps {
 
   // ==================== 一键首飞: 校准 ====================
   async otCal(kind) {
+    // 校准映射 (PREFLIGHT_CALIBRATION):
+    //   ArduPilot: gyro=param1=1, baro=param3=1, level=param5=2
+    //   PX4:       gyro=param1=1, baro=param3=1, accel=param5=1 (无独立水平校准)
+    const isPx4 = this.telemetry.firmware === 'px4';
+    if (isPx4 && kind === 'level') {
+      this.emit({
+        type: 'ot_cal_done', kind, ok: false,
+        text: 'PX4 无独立水平校准, 请用 QGC 的加速度计校准(Level Horizon)',
+      });
+      return;
+    }
     const p1 = kind === 'gyro' ? 1 : 0;
     const p3 = kind === 'baro' ? 1 : 0;
-    const p5 = kind === 'level' ? 2 : 0;
+    const p5 = kind === 'level' ? 2 : (isPx4 && kind === 'accel' ? 1 : 0);
     const ack = await this.link.sendCommand(
       MAV_CMD.PREFLIGHT_CALIBRATION, [p1, 0, p3, 0, p5, 0, 0], { timeout: 8000 });
     this.emit({
@@ -456,6 +514,13 @@ export class FcOps {
   }
 
   async startAccelCal() {
+    if (this.telemetry.firmware === 'px4') {
+      this.emit({
+        type: 'error',
+        message: 'PX4 六面加速度计校准需交互式向导, 请使用 QGroundControl 完成',
+      });
+      return;
+    }
     if (this.accelCal) { this.emit({ type: 'error', message: '六面校准已在进行中' }); return; }
     this.accelCal = { pos: null, startedAt: Date.now() };
     this.emit({ type: 'ot_accel_cal_prompt', pos: 0, text: '正在启动校准...' });
@@ -494,6 +559,13 @@ export class FcOps {
   }
 
   async otSpinTest() {
+    if (this.telemetry.firmware === 'px4') {
+      this.emit({
+        type: 'ot_spin_done', ok: false,
+        text: 'PX4 不支持本工具的拆桨电机实测, 请用 QGC 的 Motor 测试。',
+      });
+      return;
+    }
     if (this.telemetry.armed) {
       this.emit({ type: 'ot_spin_done', ok: false, text: '飞控已解锁，禁止电机测试' });
       return;
@@ -565,16 +637,30 @@ export class FcOps {
     const params = {};
     let expect = null;
     this.clearMsg('PARAM_VALUE');
+    let requests = 0;
+    const maxRequests = opts.maxRequests || 3;   // 首次无响应时重发 (PX4 链路建立期可能丢请求)
     const t0 = Date.now();
+    let lastReq = Date.now();
     this.link.requestParamList();
+    requests++;
     while (Date.now() - t0 < timeoutMs) {
       const f = this.takeMsg('PARAM_VALUE');
       if (!f) {
         if (expect !== null && Object.keys(params).length >= expect) break;
-        if (Date.now() - t0 > quietMs && Object.keys(params).length === 0) break;
+        if (Date.now() - lastReq > quietMs) {
+          if (Object.keys(params).length === 0 && requests < maxRequests) {
+            // 一条都没收到 → 重发请求
+            this.link.requestParamList();
+            requests++;
+            lastReq = Date.now();
+          } else if (Object.keys(params).length === 0) break;
+          else if (expect !== null && Object.keys(params).length >= expect) break;
+          else if (Date.now() - lastReq > quietMs * 2) break; // 有数据但后续长时间无 → 认为传输结束
+        }
         await sleep(30);
         continue;
       }
+      lastReq = Date.now();
       const name = (f.param_id || '').replace(/\0.*$/, '');
       if (f.param_count) expect = f.param_count;
       params[name] = f.param_value;
@@ -630,11 +716,8 @@ export class FcOps {
     const failed = [];
     for (let i = 0; i < entries.length; i++) {
       const [name, value] = entries[i];
-      let ok = false;
-      // 用飞控已知的参数类型写回, 避免非浮点参数因类型不符被忽略
-      const ptype = this.paramCacheAll[name] && this.paramCacheAll[name].type
-        ? this.paramCacheAll[name].type : 9;
-      try { ok = await this.link.setParam(name, value, ptype); } catch (e) { ok = false; }
+      // 类型协商: 用飞控已知类型写回, 避免类型不符被忽略 (PX4 严格校验)
+      const ok = await this.setParamSmart(name, value);
       if (ok) success++; else failed.push(name);
       this.emit({ type: 'param_restore_progress', done: i + 1, total: entries.length, name, ok });
     }
@@ -662,9 +745,7 @@ export class FcOps {
     }
     for (let i = 0; i < entries.length; i++) {
       const [name, value] = entries[i];
-      const ptype = this.paramCacheAll[name] && this.paramCacheAll[name].type
-        ? this.paramCacheAll[name].type : 9;
-      const ok = await this.link.setParam(name, value, ptype);
+      const ok = await this.setParamSmart(name, value);
       if (ok) success++; else failed.push(name);
       this.emit({ type: 'backup_restore_progress', done: i + 1, total: entries.length, name, ok });
     }
@@ -792,7 +873,9 @@ export class FcOps {
         continue;
       }
       const ts = this.timestamp();
-      const name = `log_${id}_${ts}.bin`;
+      // PX4 日志为 ULog (.ulg), ArduPilot 为 DataFlash (.bin)
+      const ext = this.telemetry.firmware === 'px4' ? 'ulg' : 'bin';
+      const name = `log_${id}_${ts}.${ext}`;
       await this.store.saveBin(name, res.data);
       saved.push({ id, file: name, size: res.data.length });
       this.emit({ type: 'log_download_saved', id, file: name, size: res.data.length });
@@ -833,7 +916,7 @@ export class FcOps {
       case 'set_param': {
         const l = this.requireLink(); if (!l) return;
         await this.withLock(async () => {
-          const ok = await l.setParam(msg.paramId, msg.paramValue, msg.paramType || 9);
+          const ok = await this.setParamSmart(msg.paramId, msg.paramValue, msg.paramType);
           if (ok) {
             this.emit({ type: 'param_set_sent', paramId: msg.paramId, paramValue: msg.paramValue });
           } else {

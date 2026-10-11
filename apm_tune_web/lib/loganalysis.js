@@ -1,5 +1,7 @@
 // 飞行日志分析: 从 .bin 提取统计/关键指标/数据片段, 并生成 AI 报告提示词
+// .ulg (PX4 ULog) 由 lib/ulog.js 解析, 经 analyzeLogAuto/extractChartsAuto 按 magic 分流
 import { parseBin } from './binlog.js';
+import { analyzeUlog, extractUlogCharts, isUlog } from './ulog.js';
 
 const TRACK_TYPES = new Set([
   'ATT', 'IMU', 'VIBE', 'GPS', 'GPA', 'BARO', 'BAT', 'BAT2', 'CURR', 'POWR',
@@ -221,6 +223,44 @@ export const LOG_SYSTEM_PROMPT = `你是资深 ArduPilot/PX4 多旋翼试飞与�
 
 export function buildLogUserPrompt(fileName, summaryText) {
   return `日志文件: ${fileName}\n\n${summaryText}\n\n请基于以上数据生成完整飞行报告。`;
+}
+
+// PX4 ULog 专用系统提示词 (参数名/术语按 PX4 对齐)
+export const ULG_SYSTEM_PROMPT = `你是资深 PX4 多旋翼试飞与 ULog 日志分析专家。
+根据提供的飞行日志统计与数据片段，输出一份完整、专业、可执行的《飞行报告》。
+要求:
+1. 使用中文 Markdown，包含以下章节:
+   ## 一、飞行概况  (时长、模式(nav_state)、起降、是否异常)
+   ## 二、姿态与振动  (姿态跟踪误差、振动、滤波是否合理)
+   ## 三、动力与电池  (电压/电流/电机输出 actuator_motors、是否过载或电压跌落)
+   ## 四、定位与导航  (GPS/卫星/EKF2 新息、位置漂移、模式切换是否合理)
+   ## 五、问题与风险  (按严重程度排序，指出证据)
+   ## 六、调参建议  (给出具体参数名 + 当前值/建议值 + 理由，仅限 PX4 参数,
+      如 MC_ROLLRATE_P/I/D/K、MC_ROLL_P、MPC_XY_VEL_P_ACC、MPC_Z_VEL_P_ACC、
+      MPC_TKO_SPEED、RTL_RETURN_ALT、BAT_LOW_THR、EKF2_* 等, v1.14+ 命名)
+   ## 七、下一步试飞建议  (安全、可执行的步骤)
+2. 只依据给定数据推断，数据不足处明确写"数据不足，需补充 XX 日志"。
+3. 不要编造未出现的数值。参数建议给出单位与取值范围。
+4. 结尾附一行安全提示。`;
+
+/** 按日志内容自动分流: ULog(PX4) 走 ulog 解析, 否则按 ArduPilot DataFlash 解析 */
+export function analyzeLogAuto(buf, opts = {}) {
+  if (isUlog(buf)) {
+    const r = analyzeUlog(buf, opts);
+    return { ...r, format: 'ulg' };
+  }
+  const r = analyzeLog(buf, opts);
+  return { ...r, format: 'bin' };
+}
+
+/** 按日志内容自动分流抽取时序曲线 (输出结构一致) */
+export function extractChartsAuto(buf, opts = {}) {
+  return isUlog(buf) ? extractUlogCharts(buf, opts) : extractCharts(buf, opts);
+}
+
+/** 选择 AI 系统提示词 (ulg → PX4, bin → ArduPilot) */
+export function pickLogSystemPrompt(format) {
+  return format === 'ulg' ? ULG_SYSTEM_PROMPT : LOG_SYSTEM_PROMPT;
 }
 
 // ==================== 传感器时序曲线(供前端画图) ====================

@@ -101,6 +101,112 @@ const PARAM_GROUPS = [
   },
 ];
 
+// ==================== PX4 参数定义 (v1.14 参数手册核对, 参数名向下兼容 v1.12+) ====================
+const PX4_PARAM_GROUPS = [
+  {
+    title: '位置/速度控制 MPC',
+    items: [
+      { name: 'MPC_XY_CRUISE', desc: '任务/RTL 水平巡航速度', unit: 'm/s', min: 3, max: 20, step: 0.5 },
+      { name: 'MPC_XY_VEL_MAX', desc: 'AUTO 模式水平速度上限', unit: 'm/s', min: 0, max: 20, step: 0.5 },
+      { name: 'MPC_Z_VEL_MAX_UP', desc: '手动/Offboard 最大上升速度', unit: 'm/s', min: 0.5, max: 8, step: 0.1 },
+      { name: 'MPC_Z_VEL_MAX_DN', desc: '手动/Offboard 最大下降速度', unit: 'm/s', min: 0.5, max: 4, step: 0.1 },
+      { name: 'MPC_Z_V_AUTO_UP', desc: 'AUTO/任务 最大上升速度', unit: 'm/s', min: 0.5, max: 8, step: 0.1 },
+      { name: 'MPC_Z_V_AUTO_DN', desc: 'AUTO/任务 最大下降速度', unit: 'm/s', min: 0.5, max: 4, step: 0.1 },
+      { name: 'MPC_ACC_HOR', desc: '水平加速度(手动/自动)', unit: 'm/s²', min: 2, max: 15, step: 0.5 },
+      { name: 'MPC_ACC_HOR_MAX', desc: '最大水平加速度', unit: 'm/s²', min: 2, max: 15, step: 0.5 },
+      { name: 'MPC_ACC_UP_MAX', desc: '最大上升加速度', unit: 'm/s²', min: 2, max: 15, step: 0.5 },
+      { name: 'MPC_ACC_DOWN_MAX', desc: '最大下降加速度', unit: 'm/s²', min: 2, max: 15, step: 0.5 },
+      { name: 'MPC_JERK_MAX', desc: '全局限制加加速度(越大越灵敏)', unit: 'm/s³', min: 0.5, max: 500, step: 0.5 },
+      { name: 'MPC_JERK_AUTO', desc: 'AUTO 模式加加速度限制', unit: 'm/s³', min: 1, max: 80, step: 0.5 },
+    ]
+  },
+  {
+    title: '起飞与降落',
+    items: [
+      { name: '*MPC_TKO_SPEED', desc: '起飞爬升速度', unit: 'm/s', min: 1, max: 5, step: 0.1 },
+      { name: 'MPC_TKO_RAMP_T', desc: '起飞油门斜坡时间常数(0=关闭斜坡)', unit: 's', min: 0, max: 5, step: 0.5 },
+      { name: '*MPC_LAND_SPEED', desc: '降落下降速度', unit: 'm/s', min: 0.6, max: 5, step: 0.1 },
+      { name: 'MPC_THR_HOVER', desc: '悬停油门(0~1,按实测/输入)', unit: '', min: 0.1, max: 0.8, step: 0.01 },
+      { name: '*MIS_TAKEOFF_ALT', desc: '任务起飞高度', unit: 'm', min: 0, max: 80, step: 0.5 },
+    ]
+  },
+  {
+    title: '姿态角环 MC (角度 P)',
+    items: [
+      { name: '*MC_ROLL_P', desc: '横滚角度环 P(6.5=默认)', unit: '', min: 0, max: 12, step: 0.1 },
+      { name: '*MC_PITCH_P', desc: '俯仰角度环 P(6.5=默认)', unit: '', min: 0, max: 12, step: 0.1 },
+      { name: 'MC_YAW_P', desc: '偏航角度环 P(2.8=默认)', unit: '', min: 0, max: 5, step: 0.1 },
+      { name: 'MC_ROLLRATE_MAX', desc: '横滚最大角速度(220=默认)', unit: 'deg/s', min: 0, max: 1800, step: 5 },
+      { name: 'MC_PITCHRATE_MAX', desc: '俯仰最大角速度(220=默认)', unit: 'deg/s', min: 0, max: 1800, step: 5 },
+      { name: 'MC_YAWRATE_MAX', desc: '偏航最大角速度(200=默认)', unit: 'deg/s', min: 0, max: 1800, step: 5 },
+    ]
+  },
+  {
+    title: '速率环 MC (RATE P/I/D/K, v1.14 命名)',
+    items: [
+      { name: '*MC_ROLLRATE_P', desc: '横滚速率环 P(0.15=默认)', unit: '', min: 0.01, max: 0.5, step: 0.01 },
+      { name: '*MC_ROLLRATE_I', desc: '横滚速率环 I(0.2=默认)', unit: '', min: 0, max: 5, step: 0.01 },
+      { name: '*MC_ROLLRATE_D', desc: '横滚速率环 D(0.003=默认)', unit: '', min: 0, max: 0.01, step: 0.0005 },
+      { name: 'MC_ROLLRATE_K', desc: '横滚速率环总增益(1.0=默认)', unit: '', min: 0.01, max: 5, step: 0.05 },
+      { name: '*MC_PITCHRATE_P', desc: '俯仰速率环 P(0.15=默认)', unit: '', min: 0.01, max: 0.6, step: 0.01 },
+      { name: '*MC_PITCHRATE_I', desc: '俯仰速率环 I(0.2=默认)', unit: '', min: 0, max: 5, step: 0.01 },
+      { name: '*MC_PITCHRATE_D', desc: '俯仰速率环 D(0.003=默认)', unit: '', min: 0, max: 0.01, step: 0.0005 },
+      { name: 'MC_PITCHRATE_K', desc: '俯仰速率环总增益(1.0=默认)', unit: '', min: 0.01, max: 5, step: 0.05 },
+      { name: 'MC_YAWRATE_P', desc: '偏航速率环 P(0.2=默认)', unit: '', min: 0, max: 0.6, step: 0.01 },
+      { name: 'MC_YAWRATE_I', desc: '偏航速率环 I(0.1=默认)', unit: '', min: 0, max: 5, step: 0.01 },
+      { name: 'MC_YAWRATE_D', desc: '偏航速率环 D(0=默认)', unit: '', min: 0, max: 5, step: 0.0005 },
+      { name: 'MC_YAWRATE_K', desc: '偏航速率环总增益(1.0=默认)', unit: '', min: 0, max: 5, step: 0.05 },
+    ]
+  },
+  {
+    title: '状态估计 EKF2',
+    items: [
+      { name: 'EKF2_GYR_NOISE', desc: '陀螺噪声(0.015=默认)', unit: 'rad/s', min: 0.0001, max: 0.1, step: 0.001 },
+      { name: 'EKF2_ACC_NOISE', desc: '加计噪声(0.35=默认)', unit: 'm/s²', min: 0.01, max: 1, step: 0.01 },
+      { name: 'EKF2_MAG_NOISE', desc: '磁力计噪声(0.05=默认)', unit: 'Gauss', min: 0.001, max: 1, step: 0.001 },
+      { name: 'EKF2_GPS_P_NOISE', desc: 'GPS 位置噪声(0.5=默认)', unit: 'm', min: 0.01, max: 10, step: 0.01 },
+      { name: 'EKF2_GPS_V_NOISE', desc: 'GPS 速度噪声(0.3=默认)', unit: 'm/s', min: 0.01, max: 5, step: 0.01 },
+      { name: 'EKF2_BARO_NOISE', desc: '气压高度噪声(3.5=默认)', unit: 'm', min: 0.01, max: 15, step: 0.1 },
+    ]
+  },
+  {
+    title: '传感器与输出',
+    items: [
+      { name: '*IMU_GYRO_CUTOFF', desc: '陀螺低通滤波(40=默认,0=关闭)', unit: 'Hz', min: 0, max: 1000, step: 5 },
+      { name: 'IMU_ACCEL_CUTOFF', desc: '加计低通滤波(30=默认,0=关闭)', unit: 'Hz', min: 0, max: 1000, step: 5 },
+      { name: 'IMU_GYRO_RATEMAX', desc: '速率环数据频率(400=默认)', unit: 'Hz', min: 100, max: 2000, step: 100 },
+    ]
+  },
+  {
+    title: '任务与返航 NAV/RTL',
+    items: [
+      { name: '*NAV_ACC_RAD', desc: '航点到达判定半径(10=默认)', unit: 'm', min: 0.05, max: 200, step: 0.5 },
+      { name: 'MIS_DIST_1WP', desc: '首航点最大距离(≤0=禁用)', unit: 'm', min: -1, max: 10000, step: 100 },
+      { name: '*RTL_RETURN_ALT', desc: '返航爬升高度(60=默认)', unit: 'm', min: 0, max: 8000, step: 0.5 },
+      { name: 'RTL_DESCEND_ALT', desc: '到家后开始下降高度(30=默认)', unit: 'm', min: 0, max: 1000, step: 0.5 },
+      { name: 'RTL_CONE_ANG', desc: '返航锥角(0/25/45/65/80/90,45=默认)', unit: '°', min: 0, max: 90, step: 1 },
+      { name: 'RTL_LAND_DELAY', desc: '到家降落前等待(-1=不降落仅悬停)', unit: 's', min: -1, max: 120, step: 0.5 },
+    ]
+  },
+  {
+    title: '安全与保护',
+    items: [
+      { name: '*COM_RC_LOSS_T', desc: 'RC 丢失判定时间(0.5=默认)', unit: 's', min: 0, max: 35, step: 0.1 },
+      { name: '*NAV_RCL_ACT', desc: 'RC 失联动作(1=悬停 2=返航 3=降落 5=终止 6=上锁)', unit: '', min: 1, max: 6, step: 1 },
+      { name: 'NAV_DLL_ACT', desc: '数据链丢失(0=禁用 1=悬停 2=返航 3=降落 5=终止 6=上锁)', unit: '', min: 0, max: 6, step: 1 },
+      { name: '*COM_DISARM_LAND', desc: '落地自动上锁延时(0=关闭)', unit: 's', min: 0, max: 120, step: 0.1 },
+      { name: '*BAT_LOW_THR', desc: '低电阈值(0~1 比例,0.15=默认)', unit: '', min: 0.12, max: 0.5, step: 0.01 },
+      { name: 'BAT_CRIT_THR', desc: '严重低电阈值(0.07=默认)', unit: '', min: 0.05, max: 0.25, step: 0.01 },
+      { name: 'BAT_EMERGEN_THR', desc: '紧急低电阈值(0.05=默认)', unit: '', min: 0.03, max: 0.1, step: 0.01 },
+      { name: '*COM_LOW_BAT_ACT', desc: '低电动作(0=警告 2=降落 3=返航+紧急降落)', unit: '', min: 0, max: 3, step: 1 },
+      { name: 'BAT1_CAPACITY', desc: '电池容量(-1=自动识别)', unit: 'mAh', min: -1, max: 100000, step: 50 },
+      { name: '*GF_ACTION', desc: '围栏动作(0=无 1=警告 2=悬停 3=返航 4=终止 5=降落)', unit: '', min: 0, max: 5, step: 1 },
+      { name: 'GF_MAX_HOR_DIST', desc: '水平围栏最大距离(0=禁用)', unit: 'm', min: 0, max: 10000, step: 1 },
+      { name: 'GF_MAX_VER_DIST', desc: '垂直围栏最大距离(0=禁用)', unit: 'm', min: 0, max: 10000, step: 1 },
+    ]
+  },
+];
+
 // ==================== 状态管理 ====================
 // ws 由 fclink.js 提供: Web Serial 直连飞控 + 服务器 WS (AI/故障/文件) 的统一传输层
 const ws = window.ws;
@@ -108,6 +214,33 @@ let paramCache = {};       // { paramId: value }
 let currentCategory = 0;
 let connected = false;
 let connectedPort = null;
+let firmware = 'apm';      // 'apm' | 'px4' (由飞控 HEARTBEAT 自动识别)
+
+function activeGroups() {
+  return firmware === 'px4' ? PX4_PARAM_GROUPS : PARAM_GROUPS;
+}
+
+// 暴露给 onetouch.js 等模块查询当前固件类型
+window.getFirmwareType = () => firmware;
+
+/** 固件类型切换: 重渲染参数表 / 推力体检 / 一键首飞方案 */
+function setFirmware(fw) {
+  if (fw !== 'apm' && fw !== 'px4') return;
+  if (firmware === fw) return;
+  firmware = fw;
+  updateFirmwareBadge();
+  if (connected) {
+    renderCategories();
+    renderThrustCheck();
+    if (typeof OneTouch !== 'undefined' && OneTouch.onFirmwareChange) OneTouch.onFirmwareChange();
+  }
+  console.log('固件类型切换为: ' + fw);
+}
+
+function updateFirmwareBadge() {
+  const el = document.getElementById('fwVersion');
+  if (el) el.textContent = '固件: ' + (firmware === 'px4' ? 'PX4' : 'ArduPilot');
+}
 
 // ==================== 串口连接 ====================
 function refreshPorts() {
@@ -176,15 +309,18 @@ function requestParams() {
 function setParam(name, value) {
   // 去掉开头的 * 号获取实际参数名
   const paramName = name.replace(/^\*/, '');
-  // 判断参数类型
-  let paramType = 6; // 默认 FLOAT
+  // 判断参数类型 (MAV_PARAM_TYPE: 6=INT32, 9=REAL32)
+  // 提示仅为初值: 服务端 setParamSmart 优先用飞控上报类型, 失败时会换类型重试
+  let paramType = 9; // REAL32 (绝大多数调参参数为浮点)
   const item = findParamItem(name);
   if (item) {
     const range = getItemRange(item);
-    if (range.step && range.step >= 1 && range.min === Math.floor(range.min)) {
-      paramType = 5; // INT32
+    if (range.step >= 1 && range.min === Math.floor(range.min)) {
+      paramType = 6; // 整数步进的参数按 INT32 发送
       value = Math.round(value);
     }
+  } else if (Number.isInteger(Number(value))) {
+    paramType = 6; // 未知参数: 值为整数时先按 INT32 尝试
   }
   ws.send(JSON.stringify({
     type: 'set_param',
@@ -195,7 +331,7 @@ function setParam(name, value) {
 }
 
 function findParamItem(name) {
-  for (const group of PARAM_GROUPS) {
+  for (const group of activeGroups()) {
     for (const item of group.items) {
       if (item.name === name) return item;
     }
@@ -262,6 +398,8 @@ ws.onmessage = (e) => {
   if (msg.type === 'disconnected') {
     connected = false;
     connectedPort = null;
+    firmware = 'apm';   // 固件识别状态复位
+    updateFirmwareBadge();
     document.getElementById('portSelect').disabled = false;
     document.getElementById('baudInput').disabled = false;
     document.getElementById('status').textContent = '未连接';
@@ -337,6 +475,7 @@ ws.onmessage = (e) => {
     if (msg.flightMode) {
       document.getElementById('flightMode').textContent = msg.flightMode + (msg.armed ? ' (已解锁)' : '');
     }
+    if (msg.firmware) setFirmware(msg.firmware); // apm / px4 自动切换
   }
 
   if (msg.type === 'reboot_sent') {
@@ -362,7 +501,7 @@ function renderCategories() {
   filter.innerHTML = '<option value="all">全部分类</option>';
   list.innerHTML = '';
 
-  PARAM_GROUPS.forEach((g, gi) => {
+  activeGroups().forEach((g, gi) => {
     // 下拉选项
     const opt = document.createElement('option');
     opt.value = gi;
@@ -379,7 +518,7 @@ function renderCategories() {
   });
 
   // 默认选中第一个
-  if (PARAM_GROUPS.length) {
+  if (activeGroups().length) {
     list.querySelector('.category').classList.add('active');
     currentCategory = 0;
     renderParams();
@@ -445,7 +584,7 @@ function renderParams() {
   let totalCount = 0;
   let shownCount = 0;
 
-  PARAM_GROUPS.forEach((group, gi) => {
+  activeGroups().forEach((group, gi) => {
     if (catFilter !== 'all' && parseInt(catFilter, 10) !== gi) return;
 
     let groupHasVisible = false;
@@ -583,10 +722,19 @@ function tcVerdict(rows) {
 }
 
 function renderThrustCheck() {
+  const wrap = document.getElementById('thrustCheck');
   const rowsEl = document.getElementById('tcRows');
   const sumEl = document.getElementById('tcSummary');
   const verdictEl = document.getElementById('tcVerdict');
   if (!rowsEl) return;
+
+  // PX4 无 MOT_* 推力体检参数, 隐藏该面板 (ArduPilot 下恢复显示)
+  if (wrap) wrap.style.display = (connected && firmware === 'px4') ? 'none' : '';
+  if (connected && firmware === 'px4') {
+    sumEl.textContent = '—';
+    verdictEl.textContent = '推力体检为 ArduPilot 专属 (MOT_* 参数); PX4 请参考 QGC 电调配置。';
+    return;
+  }
 
   if (!connected) {
     rowsEl.innerHTML = '';
