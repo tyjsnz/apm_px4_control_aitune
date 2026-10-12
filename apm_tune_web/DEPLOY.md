@@ -50,11 +50,40 @@ APM_DOMAIN=tune.example.com docker compose --profile tls up -d
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `PORT` | 3000 | 监听端口 |
+| `PORT` | 3000 | 容器内监听端口 |
 | `HOST` | 0.0.0.0 | 监听地址 |
 | `AUTH_USER` / `AUTH_PASS` | 空 | HTTP Basic 认证;**公网部署必须设置**(本应用可写飞控参数/做电机测试) |
+| `APM_DOMAIN` | localhost | tls profile 的站点域名,**可带端口**(如 `tune.example.com:8443`) |
+| `TLS_PORT` | 443 | tls profile 对外映射的 HTTPS 端口(需与 `APM_DOMAIN` 中的端口一致) |
+| `STATS_TOKEN` | 空 | 使用统计仪表盘口令(设置后访问 `/stats?token=口令`) |
+| `STATS_DISABLED` | 空 | 设为 `1` 完全关闭匿名使用统计 |
 | `BACKUP_DIR` / `LOG_DIR` / `FAULT_DIR` | `./backups` `./logs` `./faults` | 数据目录 (compose 已挂载为宿主机同名目录) |
 | `AI_CONFIG_FILE` | `./config/ai_config.json` | 全局 AI 配置(含 API Key) |
+| `STATS_FILE` | `./stats/usage.json` | 匿名使用统计数据(按天分桶 JSON) |
+
+## 非标准端口部署 (80/443 被占用, 如宝塔面板)
+
+服务器已跑 nginx/宝塔占用 80/443 时, 用非标准端口直接对外提供 HTTPS(Caddy 仍负责 TLS, 与常规用法一致):
+
+```bash
+cat > .env <<'EOF'
+AUTH_USER=admin
+AUTH_PASS=换成强密码
+APM_DOMAIN=tune.example.com:8443
+TLS_PORT=8443
+EOF
+docker compose --profile tls up -d
+# 访问 https://tune.example.com:8443
+```
+
+要点:
+
+- `APM_DOMAIN` 与 `TLS_PORT` 的端口必须一致(前者决定 Caddy 容器内监听端口, 后者决定宿主机映射)
+- 云服务器**安全组**和本机防火墙都要放行该端口; `AUTH_USER`/`AUTH_PASS` 必设
+- **不要用浏览器受限端口**: Chrome/Edge/Firefox 对 `6000-6005`、`6665-6669`、`10080` 等端口直接拒绝加载(报 `ERR_UNSAFE_PORT`), 推荐 `8443` / `9443` / `6443`
+- 站点按域名匹配: **域名必须能解析到服务器**(用 IP 访问会连接被拒), 先在 DNS 添加 A 记录
+- Caddyfile 保留 `tls internal` 时为自建 CA 证书: 首次访问浏览器显示"不安全", 点「高级 → 继续前往」即可(Web Serial 仍可用); 去掉该行则自动申请 Let's Encrypt(需域名 80/443 可达且已备案)
+
 
 ## 数据持久化
 
@@ -87,3 +116,6 @@ APM_DOMAIN=tune.example.com docker compose --profile tls up -d
 | 连接后无心跳 | 波特率不对(常见 115200/57600),或飞控 USB 只供电不通信;拔插后重新选择 |
 | 打开串口失败 (Failed to open) | 串口被其它程序占用(如 Mission Planner / QGC),先关闭它们 |
 | 提示 "需要认证" | 设置了 `AUTH_USER`/`AUTH_PASS`,浏览器弹出的登录框中输入即可 |
+| 浏览器报 `ERR_UNSAFE_PORT` | 部署端口在浏览器黑名单内(`6000-6005`/`6665-6669`/`10080` 等), 改用 `8443` 等端口并同步改 `APM_DOMAIN`/`TLS_PORT` |
+| 用 IP 访问被拒绝 / 连接关闭 | 站点按域名匹配, 需用 `APM_DOMAIN` 中的域名访问(先加 DNS A 记录); 本机联调可用 `curl --resolve 域名:端口:IP` |
+| 非 HTTPS 页面连接按钮灰色 + 顶部红条 | 页面不是安全上下文(用 `http://IP` 访问), 改用 `localhost` 或 HTTPS 访问 |
