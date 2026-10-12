@@ -360,7 +360,9 @@ async function connect() {
   if (sel === 'webserial:pick') {
     // Web Serial: 必须在用户手势内同步弹出授权对话框 (由 fclink.js 处理)
     if (!FcSerial.supported()) {
-      return alert('当前浏览器不支持 Web Serial，请使用 Chrome / Edge 浏览器');
+      return alert('当前页面无法使用串口: 浏览器不支持 Web Serial。\n'
+        + '请用 Chrome/Edge 打开; 若正在用 http://IP 访问, 请改用 localhost 或启用 HTTPS\n'
+        + '(详见页面顶部红色提示条)');
     }
   }
   ws.send(JSON.stringify({ type: 'connect', path, baud }));
@@ -1251,9 +1253,25 @@ renderCategories();
 console.log('扶摇 FuyaoTune 前端已初始化');
 
 // Web Serial 支持检测 (Firefox/Safari 不支持; 非安全上下文下 navigator.serial 也不存在)
-if (typeof FcSerial !== 'undefined' && !FcSerial.supported()) {
-  document.getElementById('status').textContent = '浏览器不支持 Web Serial';
+(function webSerialCheck() {
+  if (typeof FcSerial === 'undefined' || FcSerial.supported()) return;   // 正常情况不打扰
+  const insecure = !window.isSecureContext;   // http://IP 访问时为 false
+  document.getElementById('status').textContent = insecure ? '页面非 HTTPS, 串口不可用' : '浏览器不支持 Web Serial';
   document.getElementById('status').className = 'status-badge disconnected';
   document.getElementById('btnConnect').disabled = true;
-  console.warn('当前浏览器不支持 Web Serial，请使用 Chrome / Edge (并通过 HTTPS 或 localhost 访问)');
-}
+  const banner = document.createElement('div');
+  banner.id = 'webSerialBanner';
+  banner.style.cssText = 'background:#7a1f1f;color:#ffd9d9;padding:10px 16px;font-size:13px;'
+    + 'line-height:1.7;border-bottom:1px solid #a33;';
+  banner.innerHTML = insecure
+    ? '<b>⚠ 串口功能被浏览器禁用: 当前页面不是安全上下文</b>(正在通过 <code>http://IP</code> 访问, 浏览器隐藏了 Web Serial)。<br>'
+      + '解决: ① 飞控插在本机时请改用 <b>http://localhost:3000</b> 打开本页; '
+      + '② 局域网/远程访问请启用 HTTPS: <code>APM_DOMAIN=你的IP docker compose --profile tls up -d</code>, '
+      + '首次访问在证书警告页点「继续前往(不安全)」后刷新本页。<br>'
+      + '(WebSocket 已连接不受影响, 但串口直连必须安全上下文)'
+    : '<b>⚠ 当前浏览器不支持 Web Serial</b>: 请改用 Chrome / Edge (101+) 打开本页面 (Firefox / Safari 不支持)。';
+  document.body.insertBefore(banner, document.body.firstChild);
+  console.warn(insecure
+    ? '页面非安全上下文 (http://IP 访问): navigator.serial 不可用。请改用 localhost 访问, 或部署 HTTPS (docker compose --profile tls)'
+    : '当前浏览器不支持 Web Serial, 请使用 Chrome / Edge');
+})();

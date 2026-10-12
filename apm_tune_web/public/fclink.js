@@ -153,7 +153,11 @@
     // ---------- 本地消息处理 ----------
     _pickAndConnect(baud) {
       if (!('serial' in navigator)) {
-        this._dispatch({ type: 'error', message: '当前浏览器不支持 Web Serial，请使用 Chrome / Edge (HTTPS 访问)' });
+        this._dispatch({
+          type: 'error',
+          message: '无法使用串口: 浏览器不支持或已隐藏 Web Serial。'
+            + '请用 Chrome/Edge 并通过 https:// 或 http://localhost 打开本页 (http://IP 访问时浏览器会禁用串口 API)',
+        });
         return;
       }
       let promise;
