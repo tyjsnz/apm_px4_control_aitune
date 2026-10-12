@@ -228,7 +228,7 @@ export function renderStatsHtml(s) {
   .note { color:#7a8794; font-size:12px; margin-top:24px; max-width:760px; }
 </style></head><body>
 <h1>扶摇 FuyaoTune · 使用统计</h1>
-<div class="sub">生成于 ${esc(s.generatedAt)} · 数据保留 ${s.total.days} 天</div>
+<div class="sub">生成于 ${esc(s.generatedAt)} · 已累积 ${s.total.days} 天数据</div>
 
 <div class="cards">
 ${card('今日', s.today)}
