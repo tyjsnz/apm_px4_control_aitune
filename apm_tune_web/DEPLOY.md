@@ -119,3 +119,4 @@ docker compose --profile tls up -d
 | 浏览器报 `ERR_UNSAFE_PORT` | 部署端口在浏览器黑名单内(`6000-6005`/`6665-6669`/`10080` 等), 改用 `8443` 等端口并同步改 `APM_DOMAIN`/`TLS_PORT` |
 | 用 IP 访问被拒绝 / 连接关闭 | 站点按域名匹配, 需用 `APM_DOMAIN` 中的域名访问(先加 DNS A 记录); 本机联调可用 `curl --resolve 域名:端口:IP` |
 | 非 HTTPS 页面连接按钮灰色 + 顶部红条 | 页面不是安全上下文(用 `http://IP` 访问), 改用 `localhost` 或 HTTPS 访问 |
+| 容器状态 unhealthy 但网页正常 | 旧版健康检查在启用认证时误判(根路径 401); 新版改用 node 探针仅将 5xx 视为异常, `docker compose up -d --build` 重建即可 |

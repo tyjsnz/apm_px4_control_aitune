@@ -19,7 +19,8 @@ USER node
 ENV PORT=3000 HOST=0.0.0.0
 EXPOSE 3000
 
+# 健康检查: 启用 HTTP Basic 认证时根路径返回 401, 属正常; 仅 5xx/连接失败视为不健康
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/" || exit 1
+  CMD node -e "require('http').get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/',timeout:4000},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1)).on('timeout',function(){this.destroy();process.exit(1)})" || exit 1
 
 CMD ["node", "server.js"]
