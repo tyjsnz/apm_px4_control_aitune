@@ -25,14 +25,16 @@ services:
       - ./stats:/app/stats          # 匿名使用统计 (按天分桶 JSON)
     restart: unless-stopped
 
-  # HTTPS 反代 (Web Serial 要求 HTTPS 或 localhost):
-  #   APM_DOMAIN=你的域名 docker compose --profile tls up -d
+  # HTTPS 反代 (Web Serial 要求 HTTPS 或 localhost, 公网部署必须):
+  #   标准 443:  APM_DOMAIN=你的域名 docker compose --profile tls up -d
+  #   指定端口:  APM_DOMAIN=域名:6000 TLS_PORT=6000 docker compose --profile tls up -d   → https://域名:6000
+  #   (Caddy 自动签发 Let's Encrypt 证书; Caddyfile 保留 tls internal 时为自建 CA 证书,
+  #    浏览器首次访问需点「高级 → 继续前往」, 详见 Caddyfile 注释)
   caddy:
     profiles: ["tls"]
     image: caddy:2-alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - "${TLS_PORT:-443}:${TLS_PORT:-443}"
     environment:
       - APM_DOMAIN=${APM_DOMAIN:-localhost}
     volumes:
