@@ -22,6 +22,7 @@ const ENV = {
   AI_CONFIG_FILE,
   BACKUP_DIR: path.join(TMP, 'backups'),
   LOG_DIR: path.join(TMP, 'logs'),
+  STATS_DISABLED: '1',   // 不测统计: 关闭以免污染真实统计
 };
 
 let failures = 0;

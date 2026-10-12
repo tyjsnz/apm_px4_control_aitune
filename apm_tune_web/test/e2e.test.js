@@ -323,6 +323,7 @@ async function part2Server(logFiles) {
       FAULT_DIR: SRV_FAULT_DIR,
       AI_CONFIG_FILE: SRV_AI_CONFIG,
       AUTH_USER: '', AUTH_PASS: '',
+      STATS_DISABLED: '1',   // e2e 不测统计: 关闭以免测试流量污染真实统计
     },
   });
   srv.stdout.on('data', (d) => process.env.E2E_VERBOSE && process.stdout.write('[srv] ' + d));

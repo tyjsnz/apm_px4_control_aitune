@@ -21,6 +21,27 @@ import { createStatsStore, renderStatsHtml } from './lib/stats.js';
 import { aiChat, providerList, providerInfo } from './lib/ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 载入本地 .env (零第三方依赖): 仅补充未设置的变量, 已有环境变量优先
+//   (docker/测试通过真实 env 注入时不受影响; docker compose 也会自行读取 .env 做变量替换)
+function loadDotEnv() {
+  const f = path.join(__dirname, '.env');
+  if (!fs.existsSync(f)) return;
+  try {
+    for (const line of fs.readFileSync(f, 'utf-8').split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s || s.startsWith('#')) continue;
+      const eq = s.indexOf('=');
+      if (eq <= 0) continue;
+      const key = s.slice(0, eq).trim().replace(/^export\s+/, '');
+      let val = s.slice(eq + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1);
+      if (key && !(key in process.env)) process.env[key] = val;
+    }
+  } catch (e) { console.warn('⚠ .env 读取失败:', e.message); }
+}
+loadDotEnv();
+
 // 数据目录 (可用环境变量覆盖, 便于测试隔离)
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
 const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');

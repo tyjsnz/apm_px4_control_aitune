@@ -3,6 +3,7 @@ node_modules/
 package-lock.json
 
 # --- 运行时数据（可能含 AI 密钥/串口备份/日志）---
+.env
 config/
 backups/
 faults/
