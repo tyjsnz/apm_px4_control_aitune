@@ -5,6 +5,8 @@
 # 环境变量 (写入 .env 或直接 export):
 #   AUTH_USER / AUTH_PASS   HTTP Basic 认证账号密码 (公网强烈建议设置)
 #   APM_DOMAIN              使用 tls profile 时的访问域名/IP
+#   STATS_TOKEN             使用统计仪表盘口令 (设置后访问 /stats?token=口令; 建议 16 位以上随机串)
+#   STATS_DISABLED=1        完全关闭匿名使用统计 (默认开启, 仅统计 PV/UV/功能次数, 不含 IP/飞控数据)
 services:
   apm-tune:
     build: .
@@ -13,11 +15,14 @@ services:
     environment:
       - AUTH_USER=${AUTH_USER:-}
       - AUTH_PASS=${AUTH_PASS:-}
+      - STATS_TOKEN=${STATS_TOKEN:-}
+      - STATS_DISABLED=${STATS_DISABLED:-}
     volumes:
       - ./backups:/app/backups      # 参数备份
       - ./logs:/app/logs            # 下载的飞行日志
       - ./faults:/app/faults        # 故障速查记录
       - ./config:/app/config        # AI 配置(含 Key, 注意权限)
+      - ./stats:/app/stats          # 匿名使用统计 (按天分桶 JSON)
     restart: unless-stopped
 
   # HTTPS 反代 (Web Serial 要求 HTTPS 或 localhost):

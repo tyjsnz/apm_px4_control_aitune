@@ -493,6 +493,7 @@ function rebootFC() {
 ws.onopen = () => {
   console.log('WebSocket connected');
   refreshPorts();
+  if (window.Stats) Stats.event('page_view');   // 匿名使用统计 (仅 PV/UV, 见 stats.js)
   if (typeof AIConfig !== 'undefined') AIConfig.onOpen();
   if (typeof DataTools !== 'undefined') DataTools.onOpen();
   if (typeof Fault !== 'undefined') Fault.onOpen();
@@ -634,7 +635,10 @@ ws.onmessage = (e) => {
     if (msg.flightMode) {
       document.getElementById('flightMode').textContent = msg.flightMode + (msg.armed ? ' (已解锁)' : '');
     }
-    if (msg.firmware) setFirmware(msg.firmware); // apm / px4 自动切换
+    if (msg.firmware) {
+      setFirmware(msg.firmware); // apm / px4 自动切换
+      if (window.Stats) Stats.event('fc_connect', { fw: msg.firmware });  // 页内自动去重
+    }
   }
 
   if (msg.type === 'reboot_sent') {

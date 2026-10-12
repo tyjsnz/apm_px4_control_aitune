@@ -8,6 +8,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 
@@ -16,6 +17,7 @@ import { FAULT_SYSTEM_PROMPT, buildFaultUserPrompt } from './lib/faultai.js';
 import { THRUST_SYSTEM_PROMPT, buildThrustUserPrompt } from './lib/thrustai.js';
 import { createFaultStore } from './lib/faultstore.js';
 import { createAiConfigStore } from './lib/aiconfigstore.js';
+import { createStatsStore, renderStatsHtml } from './lib/stats.js';
 import { aiChat, providerList, providerInfo } from './lib/ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +26,11 @@ const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
 const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');
 const FAULT_DIR = process.env.FAULT_DIR || path.join(__dirname, 'faults');
 const AI_CONFIG_FILE = process.env.AI_CONFIG_FILE || path.join(__dirname, 'config', 'ai_config.json');
+const STATS_FILE = process.env.STATS_FILE || path.join(__dirname, 'stats', 'usage.json');
+
+// 使用统计 (匿名): STATS_TOKEN 设置后可通过 /stats 查看; STATS_DISABLED=1 完全关闭
+const STATS_TOKEN = process.env.STATS_TOKEN || '';
+const STATS_DISABLED = process.env.STATS_DISABLED === '1';
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -108,6 +115,7 @@ app.post('/api/backups', express.json({ limit: '20mb' }), (req, res) => {
     return res.status(400).json({ error: '缺少备份内容' });
   }
   fs.writeFileSync(path.join(BACKUP_DIR, file), body.content, 'utf-8');
+  if (statsStore) statsStore.feature('backup');
   res.json({ ok: true, file });
 });
 
@@ -128,6 +136,29 @@ app.post('/api/logs', express.raw({ type: 'application/octet-stream', limit: '50
   if (!data || !data.length) return res.status(400).json({ error: '空日志数据' });
   fs.writeFileSync(path.join(LOG_DIR, file), data);
   res.json({ ok: true, file, size: data.length });
+});
+
+// ==================== 使用统计 (匿名) ====================
+const statsStore = STATS_DISABLED ? null : createStatsStore(STATS_FILE);
+
+// GET /api/stats (JSON) 与 GET /stats (HTML 仪表盘) 均需 STATS_TOKEN;
+// 未配置 token 或已禁用时一律 404 (不暴露端点存在)
+function statsTokenOk(req) {
+  if (!STATS_TOKEN) return false;
+  const t = String(req.query.token || '');
+  if (t.length !== STATS_TOKEN.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(t), Buffer.from(STATS_TOKEN));
+}
+
+app.get('/api/stats', (req, res) => {
+  if (!statsStore || !statsTokenOk(req)) return res.status(404).json({ error: 'not found' });
+  res.json(statsStore.summary());
+});
+
+app.get('/stats', (req, res) => {
+  if (!statsStore || !statsTokenOk(req)) return res.status(404).send('not found');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(renderStatsHtml(statsStore.summary()));
 });
 
 // ==================== WebSocket ====================
@@ -189,6 +220,7 @@ async function logAnalyze(ws, msg) {
   if (Array.isArray(msg.files) && msg.files.length) files = msg.files;
   else if (msg.file) files = [msg.file];
   if (!files.length) { send(ws, { type: 'log_analyze_done', ok: false, error: '未指定日志' }); return; }
+  if (statsStore) statsStore.feature('log_analyze');
 
   const summaries = [];
   const metricsList = [];
@@ -309,6 +341,7 @@ async function faultAnalyze(ws, msg) {
     send(ws, { type: 'fault_analyze_done', ok: false, error: '请先填写故障标题或现象描述' });
     return;
   }
+  if (statsStore) statsStore.feature('fault_ai');
   const ai = aiConfigStore.resolve(msg);
   if (!aiReady(ai)) {
     send(ws, { type: 'fault_analyze_done', ok: false, error: '尚未配置可用的全局 AI，请先在「AI 设置」中完成配置' });
@@ -338,6 +371,7 @@ async function thrustAnalyze(ws, msg) {
     send(ws, { type: 'thrust_analyze_done', ok: false, error: '暂无体检数据: 请先连接飞控读取参数, 或在页面手工填写关键参数' });
     return;
   }
+  if (statsStore) statsStore.feature('thrust_ai');
   const ai = aiConfigStore.resolve(msg);
   if (!aiReady(ai)) {
     send(ws, { type: 'thrust_analyze_done', ok: false, error: '尚未配置可用的全局 AI，请先在「AI 设置」中完成配置' });
@@ -436,6 +470,18 @@ async function handleClientMessage(ws, msg) {
       await thrustAnalyze(ws, msg);
       return;
     }
+    // ---------- 使用统计 (匿名事件; 单连接限流 60 条/分钟, 超出静默丢弃) ----------
+    case 'stats_event': {
+      if (!statsStore) return;
+      const t = Date.now();
+      if (!ws.__statsWin || t - ws.__statsWin.t > 60000) ws.__statsWin = { t, n: 0 };
+      if (++ws.__statsWin.n > 60) return;
+      statsStore.record(String(msg.event || ''), {
+        anonId: String(msg.anonId || ''),
+        fw: String(msg.fw || ''),
+      });
+      return;
+    }
     default:
       if (MIGRATED_TYPES.includes(msg.type)) {
         send(ws, {
@@ -454,6 +500,9 @@ server.listen(PORT, HOST, () => {
   console.log('串口连接由浏览器 Web Serial 直连 (需 Chrome/Edge + HTTPS 或 localhost)');
   if (AUTH_ON) console.log('已启用 HTTP Basic 认证');
   else console.log('⚠ 未启用认证 (公网部署请设置 AUTH_USER / AUTH_PASS)');
+  if (STATS_DISABLED) console.log('使用统计已关闭 (STATS_DISABLED=1)');
+  else if (STATS_TOKEN) console.log('使用统计已启用: /stats?token=*** 查看仪表盘');
+  else console.log('使用统计收集中 (设置 STATS_TOKEN 后可通过 /stats 查看仪表盘)');
   const wantOpen = process.argv.includes('--open') || (process.pkg && !process.argv.includes('--no-open'));
   if (wantOpen) openBrowser(`http://localhost:${PORT}`);
 });

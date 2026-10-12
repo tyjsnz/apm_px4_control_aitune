@@ -843,6 +843,7 @@
     state.nextPurpose = getCtx().purpose;
     state.pendingItems = items;
     wsSend({ type: 'ot_write', items });
+    if (window.Stats) Stats.event('onetouch');   // 匿名使用统计: 一键首飞写入次数
   }
 
   function onWriteDone(msg) {

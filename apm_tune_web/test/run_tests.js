@@ -11,8 +11,8 @@ const STEPS = [
   ['语法检查 (server/lib/public)', 'node', ['-e', `
     const {execFileSync}=require('child_process');
     const files=['server.js','lib/mavlink.js','lib/paramlink.js','lib/mavlink_defs.js','lib/fcops.js',
-                 'lib/ai.js','lib/faultai.js','lib/thrustai.js','lib/faultstore.js','lib/aiconfigstore.js','lib/ulog.js','lib/loganalysis.js',
-                 'public/app.js','public/thrustcheck.js','public/onetouch.js','public/onetouch_data.js','public/onetouch_px4.js','public/datatools.js','public/charts.js','public/fault.js','public/aiconfig.js',
+                 'lib/ai.js','lib/faultai.js','lib/thrustai.js','lib/faultstore.js','lib/aiconfigstore.js','lib/ulog.js','lib/loganalysis.js','lib/stats.js',
+                 'public/app.js','public/thrustcheck.js','public/onetouch.js','public/onetouch_data.js','public/onetouch_px4.js','public/datatools.js','public/charts.js','public/fault.js','public/aiconfig.js','public/stats.js',
                  'public/fclink.js','public/vendor/buffer-shim.js'];
     for(const f of files) execFileSync(process.execPath,['--check',f],{stdio:'inherit'});
     console.log('  语法 OK');
@@ -30,6 +30,8 @@ const STEPS = [
   ['AI 配置存储单测', 'node', ['test/aiconfigstore.test.js']],
   ['AI 配置客户端单测', 'node', ['test/aiconfig.test.js']],
   ['故障速查 / AI 配置 WS 集成', 'node', ['test/fault_ws.test.js']],
+  ['使用统计单测', 'node', ['test/stats.test.js']],
+  ['使用统计 WS 集成', 'node', ['test/stats_ws.test.js']],
   ['MAVLink 双向对拍', 'bash', ['-c',
     'node test/mavlink_roundtrip.js gen && python3 test/pymavlink_roundtrip.py gen && python3 test/pymavlink_roundtrip.py check && node test/mavlink_roundtrip.js check']],
   ['ParamLink 单测', 'node', ['test/paramlink.test.js']],
