@@ -182,13 +182,14 @@ server {
 
 ## 产品入口页 (/)
 
-站点根路径是两个子系统的**统一入口页**(`public/landing.html`,纯静态零 JS):
+站点根路径是三套产品的**统一入口页**(`public/landing.html`,纯静态零 JS):
 
 - **`/`** — 入口页:产品介绍、功能导航、开源信息(GitHub / MIT License)
 - **`/app/`** — 扶摇 FuyaoTune 调参工作台(页面文件仍是 `public/index.html`,根静态与 `/app` 挂载同一份目录)
 - **`/sim/`** — FPV 仿真台(见下一节)
+- **`/guide/`** — 导引算法实验室(见再下一节)
 
-调参工作台头部有「🏠 主页」回入口页、「🚀 FPV 仿真台」新标签直达;仿真台头部「🎛 扶摇主页」回入口页。
+三套产品头部互链:调参工作台「🏠 主页」回入口页,仿真台「🎛 扶摇主页」,导引实验室「🏠 主页 / 🎛 调参 / 🖥 仿真台」。
 
 ## FPV 仿真台 (/sim/)
 
@@ -202,10 +203,33 @@ server {
   若日后成为瓶颈,可把 `sim/` 拆成独立容器(它本身零依赖、可独立起服务),nginx/Caddy 加一条 `/sim/` 路径反代即可
 - **回归**: `node test/sim_mount.test.js`(挂载 + 独立双态)与 `sim/` 自带单测已并入 `node test/run_tests.js`
 
+## 导引算法实验室 (/guide/)
+
+由 `algorithm/guided_simulation`(PyQt5 桌面导弹导引仿真)**完整移植**的浏览器版,同容器静态挂载,
+三处路径均由 `server.js` 提供(认证中间件之后,nginx/Caddy 零改动):
+
+| 路径 | 源目录 | 内容 |
+|---|---|---|
+| `/guide/` | `guide/web/` | 交互仿真(画布拖拽、空格启停、0.5~8× 倍速、PN/PP 对比、分段制导可视化) |
+| `/guide/docs/` | `guide/docs/` | 理论手册 5 篇 `.md` |
+| `/guide/refs/` | `guide/references/` | 参考资料 10 篇 `.md` + `figures/` 插图 |
+
+- **文档库**: `/guide/docs.html?lib=docs|refs&f=<文件名>`,15 篇 Markdown 站内在线阅读,
+  相对图片 `figures/*` 自动解析到 `/guide/refs/`
+- **无斜杠**: `/guide`、`/guide/docs`、`/guide/refs` 均 302 补斜杠,保证相对资源解析正确
+- **认证**: 复用主站 `AUTH_USER`/`AUTH_PASS`(挂载在认证中间件之后)
+- **桌面版**: `guide/` 内保留完整 PyQt5 源码,`python3 guide/main.py` 仍可本地运行
+- **数值一致性**: 数值内核由 Python 逐行移植为 `guide/web/core/*.js`;
+  `python3 guide/selftest.py --json` 重新生成 `test/golden/guide_selftest.json` 后,
+  `node test/guide_core.test.js` 做 12 场景 JS↔Python 对拍(容差 rel≤1e-6)
+- **回归**: `test/guide_mount.test.js`(挂载)、`test/guide_dom.test.js`(静态结构与文档清单)、
+  `test/guide_core.test.js`(数值对拍)均已并入 `node test/run_tests.js`
+
 ## 使用流程
 
 1. 电脑用 USB 连接飞控,打开 Chrome/Edge 访问本站点(根路径为入口页)
-2. 入口页点「🎛 扶摇调参」进入工作台 `/app/`(「🚀 FPV 仿真台」进入 `/sim/`)
+2. 入口页选择产品:「🎛 扶摇调参」进工作台 `/app/`,「🚀 FPV 仿真台」进 `/sim/`,
+   「🎯 导引算法实验室」进 `/guide/`(算法演示与理论文档)
 3. 串口下拉框选择「选择新串口…」→ 在系统弹窗中授权(CH340/CP210x 等常见芯片均支持)
 4. 选择波特率(默认 115200)→ 连接 → 参数读写 / 一键首飞 / 日志下载等与旧版完全一致
 5. 下载的日志与备份会自动上传服务器保存;AI 分析在服务器端执行(服务器需能访问 AI 服务商)

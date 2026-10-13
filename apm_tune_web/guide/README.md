@@ -6,10 +6,27 @@
 
 ---
 
+## 0. 网页版「导引算法实验室」
+
+本程序已**完整移植为浏览器版**，作为扶摇 FuyaoTune 站点的第三套产品上线：
+
+- **`/guide/`** — 交互式仿真：画布拖拽布阵、空格启停、`R/S` 快捷键、0.5~8× 倍速、
+  PN/PP 对比、分段制导可视化（视场锥 / 截获圆 / 截获点）、R(t) 与 a(t) 双曲线，
+  原生 Canvas + HTML 重写，**零依赖零构建**
+- **`/guide/docs.html`** — 理论文档库：`docs/` 5 篇 + `references/` 10 篇共 **15 篇**
+  Markdown 在线阅读（表格 / 代码块 / 插图全支持）
+- **数值同源**：数值内核由 `guidance.py` / `simulation.py` 逐行移植为 `web/core/*.js`；
+  `python selftest.py --json` 生成 `test/golden/guide_selftest.json`，
+  `node test/guide_core.test.js` 做 12 场景 JS↔Python 对拍（实测最大相对误差 1e-12 量级）
+
+桌面版（本文其余部分）仍可直接运行，两版共享同一套算法与文档。
+
+---
+
 ## 1. 快速开始
 
 ```bash
-cd guidance_sim
+cd apm_tune_web/guide
 python main.py                 # 启动图形界面
 ```
 
@@ -324,15 +341,25 @@ $$\dot\lambda\approx\frac{V_{t\perp}}{R}
 ## 7. 文件结构
 
 ```
-guidance_sim/
+guide/
 ├── main.py        主窗口、快捷键（含 F1 帮助）、定时器、命令行入口（含 --snapshot 自动截图）
 ├── guidance.py    坐标/角度工具、目标飞机模型、导弹模型、PN/PP 导引律
 ├── simulation.py  SimConfig 参数容器、Simulation 推进引擎与交战判定
 ├── canvas.py      战场画布（网格/弹道/图标/视线/拖拽）与双面板曲线图
 ├── panel.py       右侧参数面板、帮助按钮与实时数据表
 ├── docviewer.py   Markdown 帮助文档阅读器（自实现渲染，无第三方依赖）
-├── selftest.py    无界面数值自检（12 组场景，含 3 组分段制导）
+├── selftest.py    无界面数值自检（12 组场景，含 3 组分段制导；--json 输出对拍 golden）
 ├── gui_test.py    GUI 集成测试（含真实鼠标事件拖拽与文档加载）
+├── web/           网页版「导引算法实验室」(部署于站点 /guide/)
+│   ├── index.html / app.js      页面骨架与主循环（rAF + 快捷键 + 移动端抽屉）
+│   ├── canvas.js / plot.js      战场画布与 R(t)/a(t) 曲线（移植 canvas.py）
+│   ├── panel.js                 控制面板与实时数据表（移植 panel.py）
+│   ├── core/guidance.js         数值内核（移植 guidance.py，参与对拍）
+│   ├── core/simulation.js       仿真引擎（移植 simulation.py）
+│   ├── docs.html / docs.js      理论文档库 (15 篇在线阅读)
+│   ├── md.js                    轻量 Markdown 渲染器
+│   ├── guide.css                深色样式（仿真页 + 文档页）
+│   └── img/                     界面预览截图（本文档引用）
 ├── docs/          帮助文档（Markdown，可自行增删改，F1 / 帮助按钮打开）
 │   ├── README.md            总目录、快速开始、数学符号约定
 │   ├── 01_比例导引法PN.md   比例导引推导与参数选择
@@ -340,8 +367,7 @@ guidance_sim/
 │   ├── 03_仿真参数详解.md   每一个可调参数的含义与调参建议
 │   ├── 04_界面与操作解读.md 画布/曲线/数据表/判定规则/FAQ
 │   └─ 05_中段制导与拦截点计算.md 中段制导/截获判据/拦截点计算/路径规划辨析
-├── web/img/preview_flight.png / preview_result.png / preview_help.png   界面预览截图
-├── web/img/preview_phased.png     分段制导(中段虚线 + 截获点标记)预览截图
+├── references/    从发射到命中的全流程参考资料（10 章 + figures/ 9 张插图）
 └── README.md      本文档
 ```
 

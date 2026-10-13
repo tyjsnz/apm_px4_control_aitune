@@ -68,7 +68,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 
 /* ---------------- 两个产品 ---------------- */
-.products { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 26px 0 30px; }
+.products { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; margin: 26px 0 30px; }
 .product { display: block; color: var(--text); transition: all .18s; }
 .product:hover { border-color: var(--accent); transform: translateY(-3px); box-shadow: 0 12px 30px rgba(0, 0, 0, .35); }
 

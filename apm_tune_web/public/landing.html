@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>扶摇 FuyaoTune · FPV 飞控调参与整机仿真工作站</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <meta name="description" content="扶摇 FuyaoTune — 开源免费的 FPV 工作站:浏览器 Web Serial 直连 ArduPilot/PX4 一键调参,全栈物理仿真台从装配参数一键推演到稳定高效飞行。免安装、开源 MIT、数据不出本机。" />
+  <meta name="description" content="扶摇 FuyaoTune — 开源免费的 FPV 工作站:浏览器 Web Serial 直连 ArduPilot/PX4 一键调参,全栈物理仿真台从装配参数一键推演到稳定高效飞行,导引算法实验室交互式复现比例导引/纯跟踪。免安装、开源 MIT、数据不出本机。" />
   <link rel="stylesheet" href="/landing.css" />
 </head>
 <body>
@@ -26,6 +26,7 @@
       <div class="hero-cta">
         <a class="btn primary" href="/app/">🎛 扶摇调参 — 连接飞控</a>
         <a class="btn ghost" href="/sim/">🚀 FPV 仿真台 — 开始仿真</a>
+        <a class="btn ghost" href="/guide/">🎯 导引算法实验室 — 交互演示</a>
       </div>
       <div class="hero-badges">
         <span>MIT 开源</span><span>零安装</span><span>零依赖</span><span>ArduPilot · PX4 双飞控</span><span>数据不出本机</span>
@@ -34,7 +35,7 @@
   </header>
 
   <main>
-    <!-- ================= 两个产品 ================= -->
+    <!-- ================= 三个产品 ================= -->
     <section class="products">
       <a class="card product" href="/app/">
         <div class="product-head">
@@ -73,6 +74,25 @@
         </ul>
         <span class="card-go">进入仿真台 →</span>
       </a>
+
+      <a class="card product" href="/guide/">
+        <div class="product-head">
+          <span class="product-emoji">🎯</span>
+          <div>
+            <h2>导引算法实验室 <small>Guidance Lab</small></h2>
+            <p class="product-tag">比例导引 vs 纯跟踪,交互式拦截仿真</p>
+          </div>
+        </div>
+        <ul class="feat">
+          <li><b>双弹对比</b> — PN 比例导引与 PP 纯跟踪同起点同时发射,脱靶量 / 峰值过载 / 视线转率实时对拍</li>
+          <li><b>交互式战场</b> — 画布拖拽布置初始位置,空格启停、0.5~8× 倍速,R(t) 与 a(t) 曲线同步回放</li>
+          <li><b>分段制导</b> — 中段(PIP 预测拦截点 / 程序直飞)→ 导引头截获(距离+视场)→ 末段寻的,全程可视化</li>
+          <li><b>目标机动</b> — 匀速直线 / 持续左右转 / 正弦机动,转弯率、周期、命中半径均可调</li>
+          <li><b>15 篇理论文档</b> — 公式推导、参数详解,以及「从发射到命中」全流程参考资料,站内直接阅读</li>
+          <li><b>数值可对拍</b> — 与桌面版 Python 内核 12 场景回归对拍,最大相对误差 1e-12 量级</li>
+        </ul>
+        <span class="card-go">进入导引实验室 →</span>
+      </a>
     </section>
 
     <!-- ================= 特性 ================= -->
@@ -86,8 +106,8 @@
         <p>没有安装包、没有驱动、没有环境依赖。Chrome / Edge 打开 HTTPS 网页就能连飞控 —— 图书馆的电脑也能调参。</p>
       </div>
       <div class="card mini">
-        <h3>🔗 仿真与调参同域联动</h3>
-        <p>两个系统部署在同一站点:先在仿真台把桨/电机/电池方案算清楚,再进调参台把 PID 落到实机,思路不断档。</p>
+        <h3>🔗 三套系统同域联动</h3>
+        <p>调参台、仿真台、导引算法实验室部署在同一站点:从整机物理、飞控参数到制导算法,思路不断档,链接随手互跳。</p>
       </div>
       <div class="card mini">
         <h3>🏠 一键自部署</h3>
@@ -99,7 +119,7 @@
     <section class="card oss">
       <h2>📖 开源免费,永远的社区版</h2>
       <p>
-        扶摇 FuyaoTune 与 FPV 仿真台均以 <b>MIT License</b> 开源,代码托管在 GitHub。
+        扶摇 FuyaoTune、FPV 仿真台与导引算法实验室均以 <b>MIT License</b> 开源,代码托管在 GitHub。
         工程上追求「零构建、零第三方依赖」:前端原生 JS,后端 Node 内置模块,仿真内核纯物理公式 ——
         每一行逻辑都可以被审查、被学习、被改造。
       </p>
@@ -123,7 +143,7 @@
   </main>
 
   <footer>
-    <p>© 2026 tyjsnz · 扶摇 FuyaoTune & FPV 仿真台 · <a href="https://github.com/tyjsnz/apm_px4_control_aitune" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+    <p>© 2026 tyjsnz · 扶摇 FuyaoTune · FPV 仿真台 · 导引算法实验室 · <a href="https://github.com/tyjsnz/apm_px4_control_aitune" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
     <p class="foot-sub">鹏之徙于南冥也,水击三千里,抟扶摇而上者九万里。</p>
   </footer>
 

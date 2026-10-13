@@ -115,6 +115,22 @@ app.use('/sim', (req, res) => {
   return simHandler(req, res);
 });
 
+// 导引算法实验室 (guide/, 由 algorithm/guided_simulation 移植): 三处静态挂载
+//   /guide       -> guide/web         交互仿真 (index.html) + 文档库 (docs.html)
+//   /guide/docs  -> guide/docs        理论手册 .md
+//   /guide/refs  -> guide/references  参考资料 .md + figures/
+// 无斜杠 302 补斜杠, 保证页面内相对资源 (guide.css/app.js/docs.html) 解析到本目录下。
+const guideNoSlash = (mount) => (req, res, next) => {
+  if (req.originalUrl.split('?')[0] === mount) return res.redirect(302, `${mount}/`);
+  return next();
+};
+app.use('/guide/docs', guideNoSlash('/guide/docs'),
+  express.static(path.join(__dirname, 'guide', 'docs')));
+app.use('/guide/refs', guideNoSlash('/guide/refs'),
+  express.static(path.join(__dirname, 'guide', 'references')));
+app.use('/guide', guideNoSlash('/guide'),
+  express.static(path.join(__dirname, 'guide', 'web')));
+
 // 产品入口页: 根路径返回 landing.html (两个子系统的统一介绍与跳转页, 资源引用为绝对路径)
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
 

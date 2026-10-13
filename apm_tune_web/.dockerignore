@@ -10,6 +10,8 @@ faults
 config
 test
 sim/test
+guide/__pycache__
+guide/**/__pycache__
 scripts
 *.log
 docker-compose.yml

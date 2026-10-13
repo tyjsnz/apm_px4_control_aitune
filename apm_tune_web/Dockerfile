@@ -13,6 +13,8 @@ COPY lib ./lib
 COPY public ./public
 # FPV 仿真台 (零 npm 依赖, 由 server.js 挂载到 /sim/; sim/test 由 .dockerignore 排除)
 COPY sim ./sim
+# 导引算法实验室 (静态页面 + JS 数值内核, 挂载 /guide、/guide/docs、/guide/refs)
+COPY guide ./guide
 
 # 数据目录 (挂载卷): 参数备份 / 飞行日志 / 故障记录
 RUN mkdir -p backups logs faults && chown -R node:node /app

@@ -14,7 +14,9 @@ const STEPS = [
     const files=['server.js','lib/mavlink.js','lib/paramlink.js','lib/mavlink_defs.js','lib/fcops.js',
                  'lib/ai.js','lib/faultai.js','lib/thrustai.js','lib/faultstore.js','lib/ulog.js','lib/loganalysis.js','lib/stats.js',
                  'public/app.js','public/thrustcheck.js','public/onetouch.js','public/onetouch_data.js','public/onetouch_px4.js','public/datatools.js','public/charts.js','public/fault.js','public/aiconfig.js','public/stats.js',
-                 'public/fclink.js','public/vendor/buffer-shim.js'];
+                 'public/fclink.js','public/vendor/buffer-shim.js',
+                 'guide/web/app.js','guide/web/canvas.js','guide/web/plot.js','guide/web/panel.js','guide/web/md.js','guide/web/docs.js',
+                 'guide/web/core/guidance.js','guide/web/core/simulation.js'];
     for(const f of files) execFileSync(process.execPath,['--check',f],{stdio:'inherit'});
     console.log('  语法 OK');
   `]],
@@ -40,6 +42,9 @@ const STEPS = [
   ['PX4 集成 (进程内模拟器)', 'node', ['test/px4.test.js']],
   ['FPV 仿真台单测', 'bash', ['-c', 'node test/selftest.js && node test/simtest.js && node test/contract.js'], SIM],
   ['FPV 仿真台挂载集成', 'node', ['test/sim_mount.test.js']],
+  ['导引仿真数值对拍 (JS↔Python)', 'node', ['test/guide_core.test.js']],
+  ['导引实验室静态检查', 'node', ['test/guide_dom.test.js']],
+  ['导引实验室挂载集成', 'node', ['test/guide_mount.test.js']],
   ['端到端集成 (pty 模拟飞控)', 'node', ['test/e2e.test.js']],
 ];
 
