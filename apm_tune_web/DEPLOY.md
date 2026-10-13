@@ -121,8 +121,54 @@ docker compose --profile tls up -d
 ```
 
 - acme.sh 已内置 cron 每天检查,到期前自动续签并执行 reloadcmd,无需手工干预
-- 证书有效期 90 天(LE);80 端口不可用的服务器改用 DNS-01:`--issue -d 域名 --dns dns_ali`(需阿里云 AK)
+- 证书有效期 90 天(LE);80 端口不可达的服务器改用 DNS-01:`--issue -d 域名 --dns dns_ali`(需阿里云 AK)
 - `tls/` 目录含私钥,已加入 .gitignore,勿入库
+
+## 宝塔/系统 nginx 前置反代 (标准端口 https://域名 直连)
+
+服务器 80/443 被宝塔 nginx 占用时,可让 nginx 做 443 的 TLS 终结并反代到容器,
+实现不带端口的 `https://tune.flacn.net` 访问(Caddy 8443 可并存保留):
+
+```nginx
+# /www/server/panel/vhost/nginx/你的域名.conf
+server {
+    listen 80;
+    server_name 你的域名;
+    location ^~ /.well-known/acme-challenge/ {   # 保留 acme.sh webroot 续签
+        root /www/server/nginx/html;
+    }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl http2;
+    server_name 你的域名;
+    ssl_certificate     /path/tls/fullchain.pem;      # acme.sh --install-cert 的文件
+    ssl_certificate_key /path/tls/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;  # 需已有 map $http_upgrade $connection_upgrade
+        proxy_read_timeout 3600s;      # 日志下载 / AI 分析耗时长
+        client_max_body_size 0;        # 日志上传不限
+        proxy_buffering off;
+    }
+}
+```
+
+要点:
+
+- 80 块里的 **ACME 挑战路径必须排除重定向**,否则续签验证会跟着跳到 443 而失败
+- `acme.sh --install-cert` 的 `--reloadcmd` 要同时 reload nginx 与 Caddy(见上节模板)
+- 修改后 `nginx -t && nginx -s reload`;此文件为手工创建,宝塔面板 UI 中不显示属正常
+- 关键:容器端口 3000 建议限制为本机访问,强制走 nginx 的 TLS 入口:
+  `.env` 里设 `APM_BIND=127.0.0.1` 后 `docker compose up -d`,
+  外网直连 `http://IP:3000` 即失效(避免误用明文 HTTP 导致串口被浏览器禁用)
 
 ## 使用流程
 

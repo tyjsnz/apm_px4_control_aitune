@@ -11,7 +11,8 @@ services:
   apm-tune:
     build: .
     ports:
-      - "${PORT:-3000}:3000"
+      # APM_BIND=127.0.0.1 时仅本机可直连 (配合 nginx 前置反代, 对外只留 443/8443 TLS 入口)
+      - "${APM_BIND:-0.0.0.0}:${PORT:-3000}:3000"
     environment:
       - AUTH_USER=${AUTH_USER:-}
       - AUTH_PASS=${AUTH_PASS:-}
