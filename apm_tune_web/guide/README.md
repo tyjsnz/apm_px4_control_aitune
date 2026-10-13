@@ -25,20 +25,20 @@ python main.py --snapshot out.png --seconds 10   # 自动截图后退出
 
 **飞行中**（橙色=比例导引弹道，品红=纯跟踪弹道，青色=目标航线）：
 
-![飞行中](preview_flight.png)
+![飞行中](web/img/preview_flight.png)
 
 **交战结束**（顶部横幅给出两发的脱靶量）：
 
-![交战结束](preview_result.png)
+![交战结束](web/img/preview_result.png)
 
 **帮助文档窗口**（F1 / 帮助按钮，Markdown 渲染，含算法推导与逐参数说明）：
 
-![帮助文档](preview_help.png)
+![帮助文档](web/img/preview_help.png)
 
 **分段制导（中段 → 末段）**（勾选「启用分段制导」后：暗色虚线=中段弹道、亮色实线=末段弹道，
 `×` 为导引头截获点，曲线上的竖虚线是截获时刻，面板新增「导引头 / 分段制导」参数组）：
 
-![分段制导](preview_phased.png)
+![分段制导](web/img/preview_phased.png)
 
 ### 界面操作
 
@@ -340,8 +340,8 @@ guidance_sim/
 │   ├── 03_仿真参数详解.md   每一个可调参数的含义与调参建议
 │   ├── 04_界面与操作解读.md 画布/曲线/数据表/判定规则/FAQ
 │   └─ 05_中段制导与拦截点计算.md 中段制导/截获判据/拦截点计算/路径规划辨析
-├── preview_flight.png / preview_result.png / preview_help.png   界面预览截图
-├── preview_phased.png     分段制导(中段虚线 + 截获点标记)预览截图
+├── web/img/preview_flight.png / preview_result.png / preview_help.png   界面预览截图
+├── web/img/preview_phased.png     分段制导(中段虚线 + 截获点标记)预览截图
 └── README.md      本文档
 ```
 
