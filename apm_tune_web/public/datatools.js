@@ -213,9 +213,9 @@
 
   function analyzeFiles(files) {
     if (!files || !files.length) { alert('请先选择要分析的日志'); return; }
-    // 未配置全局 AI 时先提示配置(可直接去设置, 或仅生成摘要)
+    // 未配置 AI 时先提示配置(可直接去设置, 或仅生成摘要)
     if (typeof AIConfig !== 'undefined' && !AIConfig.isConfigured()) {
-      const go = confirm('尚未配置可用的全局 AI。\n\n点「确定」打开「AI 设置」（设置一次全局共用）；\n点「取消」则只生成数据摘要，不做 AI 分析。');
+      const go = confirm('尚未配置可用的 AI。\n\n点「确定」打开「AI 设置」（填入你自己的 API Key，仅保存在本机浏览器）；\n点「取消」则只生成数据摘要，不做 AI 分析。');
       if (go) { AIConfig.openSettings(); return; }
     }
     state.analyzing = true; updateButtons();
@@ -224,8 +224,8 @@
     if ($('btnChartExportHtml')) $('btnChartExportHtml').disabled = true;
     $('logAnalyzeStatus').textContent = '解析中...';
     report('logReport', `分析 ${files.length} 个日志: ${files.join(', ')}`, true);
-    // AI 配置由服务端全局持有, 此处无需携带
-    wsSend({ type: 'log_analyze', files });
+    // AI 配置随请求携带 (本机 Key), 服务端仅代理且不保存
+    wsSend({ ...(typeof AIConfig !== 'undefined' ? AIConfig.toRequest() : {}), type: 'log_analyze', files });
   }
 
   // 统一入口: 优先分析本地勾选; 否则把飞控勾选的日志"下载并分析"
@@ -236,7 +236,7 @@
     alert('请先勾选飞控日志(将自动下载并分析)，或勾选已下载的本地日志');
   }
 
-  // ==================== AI 设置 (全局) ====================
+  // ==================== AI 设置 (本机浏览器配置) ====================
   function updateAiStatus() {
     const el = $('aiStatus');
     if (!el) return;

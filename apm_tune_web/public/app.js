@@ -649,7 +649,7 @@ ws.onmessage = (e) => {
 
   // 一键首飞相关消息
   if (typeof OneTouch !== 'undefined') OneTouch.handleMessage(msg);
-  // 全局 AI 配置 (服务商列表)
+  // AI 配置 (服务商列表 + 服务端默认; Key 在浏览器本地)
   if (typeof AIConfig !== 'undefined') AIConfig.handleMessage(msg);
   // 备份恢复 / 日志分析相关消息
   if (typeof DataTools !== 'undefined') DataTools.handleMessage(msg);
@@ -1172,10 +1172,16 @@ function tcAiAnalyze() {
     if (statusEl) statusEl.textContent = '暂无体检数据: 请先读取参数或手工填写';
     return;
   }
+  if (typeof AIConfig !== 'undefined' && !AIConfig.isConfigured()) {
+    if (confirm('尚未配置可用的 AI。\n\n打开「AI 设置」填入你自己的 API Key（仅保存在本机浏览器）？')) AIConfig.openSettings();
+    return;
+  }
   const rows = window.ThrustCheck.buildRows(values, { escLinear: tcEscLinear() });
   document.getElementById('btnTcAi').disabled = true;
   if (statusEl) statusEl.textContent = '分析中...';
   ws.send(JSON.stringify({
+    // AI 配置随请求携带 (本机 Key), 服务端仅代理且不保存
+    ...(typeof AIConfig !== 'undefined' ? AIConfig.toRequest() : {}),
     type: 'thrust_analyze',
     firmware: firmware === 'px4' ? 'PX4' : 'ArduPilot',
     manual: Object.keys(tcOverrides).length > 0,

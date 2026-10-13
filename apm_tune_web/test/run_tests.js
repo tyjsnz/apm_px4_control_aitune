@@ -11,7 +11,7 @@ const STEPS = [
   ['语法检查 (server/lib/public)', 'node', ['-e', `
     const {execFileSync}=require('child_process');
     const files=['server.js','lib/mavlink.js','lib/paramlink.js','lib/mavlink_defs.js','lib/fcops.js',
-                 'lib/ai.js','lib/faultai.js','lib/thrustai.js','lib/faultstore.js','lib/aiconfigstore.js','lib/ulog.js','lib/loganalysis.js','lib/stats.js',
+                 'lib/ai.js','lib/faultai.js','lib/thrustai.js','lib/faultstore.js','lib/ulog.js','lib/loganalysis.js','lib/stats.js',
                  'public/app.js','public/thrustcheck.js','public/onetouch.js','public/onetouch_data.js','public/onetouch_px4.js','public/datatools.js','public/charts.js','public/fault.js','public/aiconfig.js','public/stats.js',
                  'public/fclink.js','public/vendor/buffer-shim.js'];
     for(const f of files) execFileSync(process.execPath,['--check',f],{stdio:'inherit'});
@@ -27,9 +27,10 @@ const STEPS = [
   ['故障存储单测', 'node', ['test/fault_store.test.js']],
   ['故障 AI Prompt 单测', 'node', ['test/faultai.test.js']],
   ['推力线性化体检单测', 'node', ['test/thrust.test.js']],
-  ['AI 配置存储单测', 'node', ['test/aiconfigstore.test.js']],
+  ['AI 参数解析单测 (Key 归属)', 'node', ['test/airesolve.test.js']],
   ['AI 配置客户端单测', 'node', ['test/aiconfig.test.js']],
   ['故障速查 / AI 配置 WS 集成', 'node', ['test/fault_ws.test.js']],
+  ['AI 代理集成 (本机 Key / 服务端护栏)', 'node', ['test/ai_proxy.test.js']],
   ['使用统计单测', 'node', ['test/stats.test.js']],
   ['使用统计 WS 集成', 'node', ['test/stats_ws.test.js']],
   ['MAVLink 双向对拍', 'bash', ['-c',

@@ -199,7 +199,7 @@
     }
     if (typeof AIConfig === 'undefined' || !AIConfig.isConfigured()) {
       if (typeof AIConfig !== 'undefined'
-        && confirm('尚未配置可用的全局 AI（服务商/模型/API Key 不完整）。\n现在打开「AI 设置」？设置一次全局共用。')) {
+        && confirm('尚未配置可用的 AI（服务商/模型/API Key 不完整）。\n现在打开「AI 设置」？Key 仅保存在本机浏览器。')) {
         AIConfig.openSettings();
       }
       return;
@@ -207,8 +207,8 @@
     state.analyzing = true;
     updateButtons();
     setStatus('AI 分析中... (可能需数十秒)');
-    // AI 配置由服务端全局持有, 此处无需携带
-    wsSend({ type: 'fault_analyze', record: rec });
+    // AI 配置随请求携带 (本机 Key), 服务端仅代理且不保存
+    wsSend({ ...(typeof AIConfig !== 'undefined' ? AIConfig.toRequest() : {}), type: 'fault_analyze', record: rec });
   }
 
   function onAnalyzeDone(msg) {

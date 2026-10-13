@@ -19,7 +19,6 @@ const STORE_DIR = path.join(OUT, 'e2e_store');
 const SRV_BACKUP_DIR = path.join(OUT, 'e2e_server_backups');
 const SRV_LOG_DIR = path.join(OUT, 'e2e_server_logs');
 const SRV_FAULT_DIR = path.join(OUT, 'e2e_server_faults');
-const SRV_AI_CONFIG = path.join(OUT, 'e2e_server_ai_config.json');
 
 let failures = 0;
 const results = [];
@@ -321,7 +320,6 @@ async function part2Server(logFiles) {
       BACKUP_DIR: SRV_BACKUP_DIR,
       LOG_DIR: SRV_LOG_DIR,
       FAULT_DIR: SRV_FAULT_DIR,
-      AI_CONFIG_FILE: SRV_AI_CONFIG,
       AUTH_USER: '', AUTH_PASS: '',
       STATS_DISABLED: '1',   // e2e 不测统计: 关闭以免测试流量污染真实统计
     },

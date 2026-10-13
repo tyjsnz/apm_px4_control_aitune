@@ -12,8 +12,8 @@ COPY server.js ./
 COPY lib ./lib
 COPY public ./public
 
-# 数据目录 (挂载卷): 参数备份 / 飞行日志 / 故障记录 / AI 配置
-RUN mkdir -p backups logs faults config && chown -R node:node /app
+# 数据目录 (挂载卷): 参数备份 / 飞行日志 / 故障记录
+RUN mkdir -p backups logs faults && chown -R node:node /app
 USER node
 
 ENV PORT=3000 HOST=0.0.0.0

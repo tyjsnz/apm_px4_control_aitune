@@ -17,7 +17,7 @@
     "test:mavlink": "node test/mavlink_roundtrip.js gen && python3 test/pymavlink_roundtrip.py gen && python3 test/pymavlink_roundtrip.py check && node test/mavlink_roundtrip.js check",
     "test:paramlink": "node test/paramlink.test.js",
     "test:fault": "node test/fault_store.test.js && node test/faultai.test.js && node test/fault_ws.test.js",
-    "test:ai": "node test/aiconfigstore.test.js && node test/aiconfig.test.js",
+    "test:ai": "node test/airesolve.test.js && node test/aiconfig.test.js",
     "test:e2e": "node test/e2e.test.js",
     "build": "node scripts/build.js",
     "build:all": "node scripts/build.js --all"

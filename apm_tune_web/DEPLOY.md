@@ -58,8 +58,17 @@ APM_DOMAIN=tune.example.com docker compose --profile tls up -d
 | `STATS_TOKEN` | 空 | 使用统计仪表盘口令(设置后访问 `/stats?token=口令`) |
 | `STATS_DISABLED` | 空 | 设为 `1` 完全关闭匿名使用统计 |
 | `BACKUP_DIR` / `LOG_DIR` / `FAULT_DIR` | `./backups` `./logs` `./faults` | 数据目录 (compose 已挂载为宿主机同名目录) |
-| `AI_CONFIG_FILE` | `./config/ai_config.json` | 全局 AI 配置(含 API Key) |
+| `AI_PROVIDER` / `AI_MODEL` / `AI_BASE_URL` / `AI_API_KEY` | 空 | **服务端默认 AI(可选)**, 供"未自带 Key 的访客"兜底;访客自己的 Key 存各自浏览器。见「AI Key 归属」 |
 | `STATS_FILE` | `./stats/usage.json` | 匿名使用统计数据(按天分桶 JSON) |
+
+## AI Key 归属 (每个用户自带 Key, 服务端不留存)
+
+- **用户的 API Key 只存在他自己浏览器**: `localStorage` 的 `fy_ai_cfg`(服务商/模型/BaseURL/是否记住) 与 `fy_ai_key`(Key 明文), **不上传、不落盘到服务器**
+- 发起分析时配置随请求经 HTTPS 交给服务端**代理调用**, 服务端不保存、不写日志
+- 设置里勾选「记住在本浏览器」→ 跨会话保留;不勾选 → 仅当前页面有效;「清除 Key」随时移除
+- 服务端**不再接收/广播** `ai_config_set` / `ai_config_clear_key` (旧协议会给明确提示);旧的 `config/ai_config.json` 已废弃, 可直接删除
+- 运维可选:在 `.env` 配 `AI_PROVIDER`/`AI_MODEL`/`AI_BASE_URL`/`AI_API_KEY` 给未带 Key 的访客兜底。
+  **护栏** — 启用后服务端会忽略访客传入的 `baseUrl`/`model` 等覆盖字段, 服务端 Key 永远只发往服务端自己指定的地址(防止被改道盗取);访客自己填了 Key 则完全使用访客的配置
 
 ## 非标准端口部署 (80/443 被占用, 如宝塔面板)
 
@@ -92,7 +101,8 @@ docker compose --profile tls up -d
 - `backups/` — 参数备份 (`backup_*.json` / `param_*.json`)
 - `logs/` — 下载的飞行日志 (`log_*.bin`, 可删除以释放空间)
 - `faults/` — 故障速查记录
-- `config/` — AI 配置(含 Key,建议 `chmod 600 config`)
+- `stats/` — 匿名使用统计 (`usage.json`)
+- AI Key **不在服务器**(存用户浏览器), 故无 `config/` 目录
 
 ## 反向代理 / HTTPS 说明
 

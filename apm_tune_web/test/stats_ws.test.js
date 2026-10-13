@@ -19,7 +19,6 @@ const ENV = {
   STATS_TOKEN: TOKEN,
   STATS_FILE: path.join(TMP, 'usage.json'),
   FAULT_DIR: path.join(TMP, 'faults'),
-  AI_CONFIG_FILE: path.join(TMP, 'config', 'ai_config.json'),
   BACKUP_DIR: path.join(TMP, 'backups'),
   LOG_DIR: path.join(TMP, 'logs'),
 };

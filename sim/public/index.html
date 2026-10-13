@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV 无人机仿真台 · 结构/空气动力/流体/能量/控制全栈分析</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>FPV<em>仿真台</em></h1>
+  <span class="sub">结构 · 空气动力 · 流体 · 能量链 · 控制全栈物理仿真</span>
+
+  <div class="seg" id="typeSeg">
+    <button data-type="multirotor" class="on">多旋翼</button>
+    <button data-type="vtol">垂起火箭</button>
+    <button data-type="fixedwing">固定翼</button>
+  </div>
+
+  <div class="spacer"></div>
+  <span id="status">就绪</span>
+  <button class="btn primary" id="runBtn">▶ 运行仿真</button>
+</header>
+
+<main>
+  <!-- ================= 配置面板 ================= -->
+  <aside id="side">
+    <h2>整机演示</h2>
+    <div class="demos" id="demos"></div>
+
+    <div id="mrCfg">
+      <h2>机架</h2>
+      <div class="field"><label>机架</label><select id="frameId"></select></div>
+      <div class="field"><label>电机数</label><select id="rotorCount">
+        <option value="">跟随机架</option>
+        <option value="4">4 轴</option><option value="6">6 轴</option><option value="8">8 轴</option>
+      </select></div>
+      <div class="field"><label>臂长</label><input id="arm_m" type="number" step="0.005" placeholder="自动"><span class="unit">m</span></div>
+      <div class="hint">留空按机架默认值</div>
+    </div>
+
+    <div id="fwCfg" style="display:none">
+      <h2>机翼</h2>
+      <div class="field"><label>机型</label><select id="wingId"></select></div>
+      <div class="field"><label>翼展</label><input id="wingSpan" type="number" step="0.05" placeholder="自动"><span class="unit">m</span></div>
+      <div class="field"><label>翼面积</label><input id="wingArea" type="number" step="0.01" placeholder="自动"><span class="unit">m²</span></div>
+      <div class="hint">留空按机型默认值</div>
+    </div>
+
+    <div id="vtolCfg" style="display:none">
+      <h2>火箭机型</h2>
+      <div class="field"><label>型号</label><select id="rocketId"></select></div>
+      <div class="field"><label>机身长</label><input id="bodyLength_m" type="number" step="0.01" placeholder="自动"><span class="unit">m</span></div>
+      <div class="field"><label>机身直径</label><input id="bodyD_mm" type="number" step="1" placeholder="自动"><span class="unit">mm</span></div>
+      <div class="field"><label>尾翼半展</label><input id="finSpan_m" type="number" step="0.01" placeholder="自动"><span class="unit">m</span></div>
+      <div class="field"><label>尾翼面积</label><input id="finArea_m2" type="number" step="0.001" placeholder="自动"><span class="unit">m²</span></div>
+      <div class="hint">留空按机型默认值；臂长即机架臂长</div>
+    </div>
+
+    <h2>动力</h2>
+    <div class="field"><label>电机</label><select id="motorType"></select></div>
+    <div class="field"><label>KV</label><input id="kv" type="number" step="50" placeholder="默认"><span class="unit">KV</span></div>
+    <div class="field"><label>电调</label><select id="escType"></select></div>
+    <div class="field"><label>桨径</label><input id="propD" type="number" step="1"><span class="unit">mm</span></div>
+    <div class="field"><label>桨距</label><input id="propP" type="number" step="1"><span class="unit">mm</span></div>
+    <div class="field"><label>桨叶数</label><input id="propB" type="number" step="1" min="2" max="14"></div>
+    <div class="field"><label>桨材料</label><select id="propMaterial"></select></div>
+
+    <h2>电池</h2>
+    <div class="field"><label>电芯数</label><input id="cells" type="number" step="1" min="1" max="24"><span class="unit">S</span></div>
+    <div class="field"><label>容量</label><input id="capacity_mAh" type="number" step="100"><span class="unit">mAh</span></div>
+    <div class="field"><label>化学</label><select id="chemistry"></select></div>
+    <div class="field"><label>C 数</label><input id="cRating" type="number" step="5" placeholder="默认"><span class="unit">C</span></div>
+
+    <h2>线路</h2>
+    <div class="field"><label>线规</label><select id="wireAwg">
+      <option value="">16 AWG（默认）</option>
+      <option value="12">12 AWG</option><option value="14">14 AWG</option>
+      <option value="16">16 AWG</option><option value="18">18 AWG</option>
+      <option value="20">20 AWG</option><option value="22">22 AWG</option>
+    </select></div>
+    <div class="field"><label>线长</label><input id="wireLen_cm" type="number" step="1" placeholder="10"><span class="unit">cm</span></div>
+
+    <h2>任务与环境</h2>
+    <div class="field"><label>目标速度</label><input id="target_kmh" type="number" step="5"><span class="unit">km/h</span></div>
+    <div class="field"><label>载荷</label><input id="payload_g" type="number" step="50" placeholder="0"><span class="unit">g</span></div>
+    <div class="field"><label>海拔</label><input id="altitude" type="number" step="100" placeholder="0"><span class="unit">m</span></div>
+    <div class="field"><label>气温</label><input id="tempC" type="number" step="1" placeholder="25"><span class="unit">℃</span></div>
+
+    <h2>高级</h2>
+    <div class="field"><label>整机重量</label><input id="massOverride_g" type="number" step="10" placeholder="自动计算"><span class="unit">g</span></div>
+    <div class="hint">覆盖质量估算（例如实测空机+电池）</div>
+
+    <!-- ================= 调参表（半经验系数 / 判据阈值） ================= -->
+    <details id="tuningBox">
+      <summary>调参表<span id="tuningBadge" class="tbadge"></span></summary>
+      <div class="hint">仿真公式分两类：<b>物理定律</b>（动量理论/翼素/弯矩）不可调；下方是<b>半经验系数</b>与<b>判据阈值</b>，改了会改变结果。留空＝用默认值。</div>
+      <div class="tuning-acts">
+        <button type="button" id="tuningReset" class="btn small">全部恢复默认</button>
+        <button type="button" id="tuningCompare" class="btn small">对比默认结果</button>
+      </div>
+      <div id="tuningGroups"></div>
+    </details>
+  </aside>
+
+  <!-- ================= 结果区 ================= -->
+  <section id="result">
+    <div class="empty" id="empty">
+      <p><b>选择左侧参数，点击「运行仿真」</b></p>
+      <p>将输出结构强度、空气动力、流体、能量链、PID 控制、诊断报告与首飞流程</p>
+      <p style="margin-top:14px">或点击「整机演示」里的预设一键加载</p>
+    </div>
+
+    <div id="kpis" style="display:none"></div>
+    <div id="tuneCmp" style="display:none"></div>
+    <div id="issues" style="display:none"></div>
+
+    <div class="tabs" id="tabs" style="display:none">
+      <button data-p="overview" class="on">总览与报告</button>
+      <button data-p="tables">数据表</button>
+      <button data-p="charts">图表</button>
+      <button data-p="plan">首飞流程</button>
+      <button data-p="solutions">改造方案</button>
+    </div>
+
+    <div class="panel on" id="p-overview"></div>
+    <div class="panel" id="p-tables"></div>
+    <div class="panel" id="p-charts"></div>
+    <div class="panel" id="p-plan"></div>
+    <div class="panel" id="p-solutions"></div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

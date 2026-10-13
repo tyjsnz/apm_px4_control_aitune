@@ -1,0 +1,14 @@
+{
+  "name": "fpv-sim",
+  "version": "0.1.0",
+  "description": "FPV 无人机从装配到稳定高效飞行的全栈物理仿真",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node test/selftest.js && node test/simtest.js && node test/contract.js",
+    "scan": "node test/pidscan.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -79,6 +79,48 @@ export function providerInfo(id) {
   return PROVIDERS[id] || PROVIDERS.deepseek;
 }
 
+/** 该服务商是否可免 Key 调用 (仅真实存在于目录中的服务商) */
+export function isKeyOptional(id) {
+  return !!(id && PROVIDERS[id] && PROVIDERS[id].keyOptional);
+}
+
+/**
+ * 解析一次 AI 请求最终使用的参数 (B 方案: Key 归属浏览器, 服务端只代理).
+ * 优先级:
+ *   1. 客户端自带可用配置 (有 Key, 或免 Key 服务商) → 完全使用客户端字段;
+ *   2. 否则若服务端默认可用 (env AI_* 配置) → 使用服务端默认, 并**忽略客户端
+ *      的 baseUrl/apiKey 等覆盖字段** (护栏: 服务端 Key 绝不按客户端指定的
+ *      地址外发, 防止被改道盗取);
+ *   3. 否则回退到客户端字段 (此时多半缺 Key, 由调用方 aiReady 拦截并提示).
+ *
+ * @param {object} msg        客户端消息 (provider/model/baseUrl/apiKey)
+ * @param {object} defaults   服务端默认 {provider, model, baseUrl, apiKey}
+ * @returns {{provider:string, model:string, baseUrl:string, apiKey:string,
+ *            source:'client'|'server'|''}}
+ */
+export function resolveAi(msg = {}, defaults = {}) {
+  const s = (v) => String(v == null ? '' : v).trim();
+  const client = {
+    provider: s(msg.provider),
+    model: s(msg.model),
+    baseUrl: s(msg.baseUrl),
+    apiKey: s(msg.apiKey),
+  };
+  const clientOwn = !!client.apiKey || isKeyOptional(client.provider);
+  if (client.provider && clientOwn) return { ...client, source: 'client' };
+
+  const d = {
+    provider: s(defaults.provider),
+    model: s(defaults.model),
+    baseUrl: s(defaults.baseUrl),
+    apiKey: s(defaults.apiKey),
+  };
+  const serverReady = d.provider && d.model && (d.apiKey || isKeyOptional(d.provider));
+  if (serverReady) return { ...d, source: 'server' };
+
+  return { ...client, source: client.provider ? 'client' : '' };
+}
+
 function chatEndpoint(baseUrl) {
   const b = String(baseUrl || '').trim().replace(/\/+$/, '');
   if (!b) return null;

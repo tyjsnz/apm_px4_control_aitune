@@ -264,13 +264,13 @@
     </div>
 
     <div class="dt-ai">
-      <h4>AI 分析设置 <span class="dt-hint">（全局配置，日志分析与故障速查共用）</span></h4>
+      <h4>AI 分析设置 <span class="dt-hint">（本机浏览器配置，日志分析 / 故障速查 / 动力体检共用）</span></h4>
       <div class="ai-bar">
         <span id="aiStatus" class="ai-status">AI: 未配置</span>
         <button id="aiSettingsBtn">⚙ AI 设置</button>
         <button id="aiClearStoredKey" class="dt-danger-btn">清除 Key</button>
       </div>
-      <p class="dt-note">🔒 在「AI 设置」中配置，设置一次全局共用（日志分析与故障速查）。勾选「记住 API Key」会保存到本机服务器 config/ai_config.json（仅建议本地部署）；不勾选则仅本次服务运行期间有效。</p>
+      <p class="dt-note">🔒 在「AI 设置」中填入你自己的 API Key：只保存在本机浏览器（localStorage），不会上传服务器。勾选「记住」跨会话保留，不勾选则刷新即失效；发起分析时经 HTTPS 随请求交给服务端代理，服务端不保存、不写日志。</p>
     </div>
 
     <div class="dt-bar">
@@ -292,7 +292,7 @@
       <button id="ftDelete" class="dt-danger-btn">删除当前</button>
       <button id="ftExport">导出 Markdown</button>
       <span id="ftStatus" class="dt-status">未连接</span>
-      <span class="dt-hint">记录永久保存在服务器 faults/ 目录；AI 使用全局配置（见「AI 设置」）</span>
+      <span class="dt-hint">记录永久保存在服务器 faults/ 目录；AI 使用本机浏览器配置（见「AI 设置」）</span>
     </div>
 
     <div class="ft-layout">
@@ -361,7 +361,7 @@
             <button id="ftAiSettingsBtn">⚙ AI 设置</button>
             <button id="ftAiRun">🤖 用 AI 分析当前故障</button>
           </div>
-          <p class="dt-note">🔒 AI 使用全局配置（「AI 设置」里配置一次，日志分析与故障速查共用）；分析结果会写入下方文本框并随记录一并保存。</p>
+          <p class="dt-note">🔒 AI 使用本机浏览器里的配置（「AI 设置」填写自己的 Key，仅存本机、不上传服务器）；分析结果会写入下方文本框并随记录一并保存。</p>
           <textarea id="ftAiReport" class="ft-ai-report" rows="10" placeholder="AI 分析结果将显示在这里，可编辑后点击「保存」写入记录"></textarea>
         </div>
       </div>

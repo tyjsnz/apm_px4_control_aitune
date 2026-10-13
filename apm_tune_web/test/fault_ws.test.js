@@ -1,4 +1,4 @@
-// 故障速查 + 全局 AI 配置 WebSocket 集成测试 (不依赖飞控/PTY/pymavlink)
+// 故障速查 + AI 配置(本机 Key) WebSocket 集成测试 (不依赖飞控/PTY/pymavlink)
 //   node test/fault_ws.test.js
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -11,15 +11,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const PORT = 3988;
 
-// 隔离的数据目录(避免污染真实 config/ faults/ 等)
+// 隔离的数据目录(避免污染真实 faults/ 等)
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'faultws-'));
 const FAULT_DIR = path.join(TMP, 'faults');
-const AI_CONFIG_FILE = path.join(TMP, 'config', 'ai_config.json');
 const ENV = {
   ...process.env,
   PORT: String(PORT),
   FAULT_DIR,
-  AI_CONFIG_FILE,
   BACKUP_DIR: path.join(TMP, 'backups'),
   LOG_DIR: path.join(TMP, 'logs'),
   STATS_DISABLED: '1',   // 不测统计: 关闭以免污染真实统计
@@ -87,51 +85,43 @@ async function main() {
     check('空记录被拒绝', an0.ok === false && /标题|现象/.test(an0.error || ''), JSON.stringify(an0));
     send({ type: 'fault_analyze', record: { title: 'x' } });
     const an1 = await waitFor(ws, (m) => m.type === 'fault_analyze_done', 5000, 'fault_analyze_done(未配置)');
-    check('未配置全局 AI 时拒绝分析', an1.ok === false && /全局 AI|设置/.test(an1.error || ''), JSON.stringify(an1));
+    check('未配置 AI 时拒绝分析并指引「AI 设置」', an1.ok === false && /尚未配置可用的 AI|AI 设置/.test(an1.error || ''), JSON.stringify(an1));
+    check('服务端从未落盘 Key 文件', !fs.existsSync(path.join(ROOT, 'config', 'ai_config.json')));
 
     send({ type: 'fault_delete', file: saved.file });
     const del = await waitFor(ws, (m) => m.type === 'fault_deleted', 5000, 'fault_deleted');
     check('fault_deleted ok', del.ok === true);
 
-    // ---------- 全局 AI 配置 ----------
+    // ---------- AI 配置 (B 方案: Key 归属浏览器, 服务端只提供目录与 env 默认) ----------
     send({ type: 'ai_providers' });
     const ap = await waitFor(ws, (m) => m.type === 'ai_providers', 5000, 'ai_providers');
     check('ai_providers 非空', Array.isArray(ap.providers) && ap.providers.length > 3);
 
     send({ type: 'ai_config_get' });
     const c0 = await waitFor(ws, (m) => m.type === 'ai_config', 5000, 'ai_config(get)');
-    check('初始 ai_config 为空', c0.config.provider === '' && c0.config.hasKey === false);
+    check('初始 ai_config 为空且标记 server 来源', c0.config.provider === '' && c0.config.hasKey === false
+      && c0.config.source === 'server', JSON.stringify(c0.config));
     check('ai_config 不下发明文 Key', !('apiKey' in c0.config));
 
-    // 不记住 Key
-    send({ type: 'ai_config_set', config: { provider: 'deepseek', model: 'deepseek-flash', remember: false }, apiKey: 'sk-1' });
-    const c1 = await waitFor(ws, (m) => m.type === 'ai_config' && m.config.provider === 'deepseek', 5000, 'ai_config(set)');
-    check('设置后 hasKey=true', c1.config.hasKey === true && c1.config.model === 'deepseek-flash');
-    const raw1 = fs.existsSync(AI_CONFIG_FILE) ? JSON.parse(fs.readFileSync(AI_CONFIG_FILE, 'utf-8')) : {};
-    check('provider/model 已落盘', raw1.provider === 'deepseek' && raw1.model === 'deepseek-flash');
-    check('不记住时不落盘 Key', !('apiKey' in raw1), JSON.stringify(raw1));
+    // 服务端不再接收 Key: 旧协议消息给出明确提示 (而非静默)
+    send({ type: 'ai_config_set', config: { provider: 'deepseek', model: 'deepseek-flash', remember: true }, apiKey: 'sk-1' });
+    const dep1 = await waitFor(ws, (m) => m.type === 'error', 5000, 'ai_config_set(deprecated)');
+    check('ai_config_set 被拒绝并提示本机保存', /浏览器/.test(dep1.message || ''), JSON.stringify(dep1));
+    check('服务端不落盘任何 AI 配置', !fs.existsSync(path.join(ROOT, 'config', 'ai_config.json')));
 
-    // 记住 Key
-    send({ type: 'ai_config_set', config: { provider: 'deepseek', model: 'deepseek-flash', remember: true }, apiKey: 'sk-2' });
-    await waitFor(ws, (m) => m.type === 'ai_config' && m.config.remember === true, 5000, 'ai_config(remember)');
-    const raw2 = JSON.parse(fs.readFileSync(AI_CONFIG_FILE, 'utf-8'));
-    check('记住时 Key 落盘', raw2.apiKey === 'sk-2', JSON.stringify(raw2));
+    send({ type: 'ai_config_clear_key' });
+    const dep2 = await waitFor(ws, (m) => m.type === 'error', 5000, 'ai_config_clear_key(deprecated)');
+    check('ai_config_clear_key 提示去「AI 设置」', /AI 设置/.test(dep2.message || ''), JSON.stringify(dep2));
+    check('服务端仍不落盘', !fs.existsSync(path.join(ROOT, 'config', 'ai_config.json')));
 
-    // 新连接应拿到全局配置(证明"设置一次, 各处可用")
+    // 新连接拿到的只是"服务端默认"(不含 Key), 各用户配置互不共享
     const ws2 = await connect();
     const push = await waitFor(ws2, (m) => m.type === 'ai_config', 5000, 'ai_config(push)');
-    check('新连接自动获得全局配置', push.config.provider === 'deepseek' && push.config.hasKey === true);
+    check('新连接只拿到服务端默认 (用户 Key 不互通)', push.config.source === 'server'
+      && push.config.hasKey === false, JSON.stringify(push.config));
     ws2.close();
 
-    // 清除 Key (先清空待处理消息, 避免匹配到之前的 hasKey=false)
-    ws.__msgs.length = 0;
-    send({ type: 'ai_config_clear_key' });
-    const c2 = await waitFor(ws, (m) => m.type === 'ai_config', 5000, 'ai_config(clear)');
-    check('清除后 hasKey=false', c2.config.hasKey === false);
-    const raw3 = JSON.parse(fs.readFileSync(AI_CONFIG_FILE, 'utf-8'));
-    check('清除后文件无 Key', !('apiKey' in raw3), JSON.stringify(raw3));
-
-    console.log(failures === 0 ? '\n故障速查 / 全局 AI 配置 WS 集成测试通过' : `\n${failures} 项失败`);
+    console.log(failures === 0 ? '\n故障速查 / AI 配置 WS 集成测试通过' : `\n${failures} 项失败`);
   } catch (err) {
     console.error('测试异常:', err.message);
     failures++;

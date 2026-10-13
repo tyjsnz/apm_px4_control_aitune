@@ -1,7 +1,7 @@
 // APM/PX4 调参 Web 后端 (服务器部署版)
 // 职责边界 (Web Serial 架构):
 //   - 飞控串口链路在浏览器端 (Web Serial) 直连, MAVLink/参数/日志操作由浏览器完成
-//   - 本服务端只负责: 静态页面 / AI 代理(日志·故障分析, Key 留在服务端) / 故障记录 / 备份·日志文件存储
+//   - 本服务端只负责: 静态页面 / AI 代理(日志·故障分析, 每次请求的 Key 由客户端携带, 服务端不保存) / 故障记录 / 备份·日志文件存储
 // 客户端消息协议与旧版保持一致; 串口类消息 (connect/set_param/ot_*/log_* 等) 已迁移至浏览器端。
 import express from 'express';
 import { createServer } from 'http';
@@ -16,9 +16,8 @@ import { analyzeLogAuto, buildLogUserPrompt, pickLogSystemPrompt, extractChartsA
 import { FAULT_SYSTEM_PROMPT, buildFaultUserPrompt } from './lib/faultai.js';
 import { THRUST_SYSTEM_PROMPT, buildThrustUserPrompt } from './lib/thrustai.js';
 import { createFaultStore } from './lib/faultstore.js';
-import { createAiConfigStore } from './lib/aiconfigstore.js';
 import { createStatsStore, renderStatsHtml } from './lib/stats.js';
-import { aiChat, providerList, providerInfo } from './lib/ai.js';
+import { aiChat, providerList, isKeyOptional, resolveAi } from './lib/ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,8 +45,30 @@ loadDotEnv();
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
 const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');
 const FAULT_DIR = process.env.FAULT_DIR || path.join(__dirname, 'faults');
-const AI_CONFIG_FILE = process.env.AI_CONFIG_FILE || path.join(__dirname, 'config', 'ai_config.json');
 const STATS_FILE = process.env.STATS_FILE || path.join(__dirname, 'stats', 'usage.json');
+
+// 服务端默认 AI 配置 (可选, 仅供"未自带 Key 的访客"兜底; 由环境变量提供)
+//   AI_PROVIDER / AI_MODEL / AI_BASE_URL / AI_API_KEY
+// 护栏: 使用该默认时一律忽略客户端传入的 baseUrl/model 等覆盖字段,
+//       确保服务端 Key 永远只发往服务端自己指定的地址 (防止被改道盗取)。
+// 用户自己的 Key 存在各自浏览器里, 随请求携带, 服务端不落盘、不记日志。
+const AI_DEFAULTS = {
+  provider: process.env.AI_PROVIDER || '',
+  model: process.env.AI_MODEL || '',
+  baseUrl: process.env.AI_BASE_URL || '',
+  apiKey: process.env.AI_API_KEY || '',
+};
+
+/** 服务端默认的对外形态 (绝不含明文 Key) */
+function aiDefaultsPublic() {
+  return {
+    provider: AI_DEFAULTS.provider,
+    model: AI_DEFAULTS.model,
+    baseUrl: AI_DEFAULTS.baseUrl,
+    hasKey: !!AI_DEFAULTS.apiKey,
+    source: 'server',
+  };
+}
 
 // 使用统计 (匿名): STATS_TOKEN 设置后可通过 /stats 查看; STATS_DISABLED=1 完全关闭
 const STATS_TOKEN = process.env.STATS_TOKEN || '';
@@ -184,14 +205,6 @@ app.get('/stats', (req, res) => {
 
 // ==================== WebSocket ====================
 const clients = new Set();
-const broadcast = (obj) => {
-  const msg = JSON.stringify(obj);
-  for (const c of clients) {
-    if (c.readyState === 1) {
-      try { c.send(msg); } catch (e) { /* ignore */ }
-    }
-  }
-};
 const send = (ws, obj) => {
   if (ws && ws.readyState === 1) {
     try { ws.send(JSON.stringify(obj)); } catch (e) { /* ignore */ }
@@ -208,12 +221,18 @@ const MIGRATED_TYPES = [
   'log_list', 'log_download', 'log_erase',
 ];
 
+// 已废弃的协议消息: AI 配置已改为浏览器本地保存 (服务端不再接收/保存 Key)
+const DEPRECATED_TYPES = {
+  ai_config_set: 'AI 配置已改为本机浏览器保存 (localStorage), 服务端不再接收 Key; 请刷新页面使用新版前端',
+  ai_config_clear_key: 'API Key 现保存在浏览器本地; 请在「AI 设置」中点「清除 Key」',
+};
+
 wss.on('connection', (ws) => {
   clients.add(ws);
   console.log('WebSocket 客户端已连接');
   // 连接时推送当前状态
   send(ws, { type: 'heartbeat', flightMode: '--', armed: false });
-  send(ws, { type: 'ai_config', config: aiConfigStore.getPublic() });
+  send(ws, { type: 'ai_config', config: aiDefaultsPublic() });
 
   ws.on('close', () => {
     clients.delete(ws);
@@ -283,8 +302,8 @@ async function logAnalyze(ws, msg) {
     summary: combined, metrics: metricsList,
   });
 
-  // 使用全局 AI 配置 (请求中显式指定的字段可覆盖)
-  const ai = aiConfigStore.resolve(msg);
+  // 使用解析后的 AI 参数 (客户端自带 Key 优先, 否则服务端 env 默认兜底)
+  const ai = resolveAi(msg, AI_DEFAULTS);
   if (!aiReady(ai)) {
     // 未配置可用的 AI -> 仅返回数据摘要
     send(ws, { type: 'log_analyze_done', ok: true, ai: false, file: title, files: usedFiles, report: combined });
@@ -346,14 +365,11 @@ function listLocalLogs() {
 // ==================== 故障速查: 记录存储 ====================
 const faultStore = createFaultStore(FAULT_DIR);
 
-// ==================== 全局 AI 配置 ====================
-const aiConfigStore = createAiConfigStore(AI_CONFIG_FILE);
-
-/** 全局配置是否可用于发起 AI 请求(可免 Key 的服务商除外) */
+// ==================== AI 参数解析 ====================
+/** 该参数集是否可直接发起 AI 请求 (可免 Key 的服务商除外) */
 function aiReady(cfg) {
   if (!cfg || !cfg.provider || !cfg.model) return false;
-  const info = providerInfo(cfg.provider);
-  return !!cfg.apiKey || !!(info && info.keyOptional);
+  return !!cfg.apiKey || isKeyOptional(cfg.provider);
 }
 
 async function faultAnalyze(ws, msg) {
@@ -363,9 +379,9 @@ async function faultAnalyze(ws, msg) {
     return;
   }
   if (statsStore) statsStore.feature('fault_ai');
-  const ai = aiConfigStore.resolve(msg);
+  const ai = resolveAi(msg, AI_DEFAULTS);
   if (!aiReady(ai)) {
-    send(ws, { type: 'fault_analyze_done', ok: false, error: '尚未配置可用的全局 AI，请先在「AI 设置」中完成配置' });
+    send(ws, { type: 'fault_analyze_done', ok: false, error: '尚未配置可用的 AI: 请在「AI 设置」中填写你自己的 API Key (仅保存在本机浏览器)' });
     return;
   }
   send(ws, { type: 'fault_analyze_start' });
@@ -393,9 +409,9 @@ async function thrustAnalyze(ws, msg) {
     return;
   }
   if (statsStore) statsStore.feature('thrust_ai');
-  const ai = aiConfigStore.resolve(msg);
+  const ai = resolveAi(msg, AI_DEFAULTS);
   if (!aiReady(ai)) {
-    send(ws, { type: 'thrust_analyze_done', ok: false, error: '尚未配置可用的全局 AI，请先在「AI 设置」中完成配置' });
+    send(ws, { type: 'thrust_analyze_done', ok: false, error: '尚未配置可用的 AI: 请在「AI 设置」中填写你自己的 API Key (仅保存在本机浏览器)' });
     return;
   }
   send(ws, { type: 'thrust_analyze_start' });
@@ -445,25 +461,13 @@ async function handleClientMessage(ws, msg) {
       send(ws, { type: 'backup_list', backups: listBackups() });
       return;
     }
-    // ---------- AI 配置 ----------
+    // ---------- AI 配置 (Key 归属浏览器本地; 服务端只给服务商列表与 env 默认) ----------
     case 'ai_providers': {
       send(ws, { type: 'ai_providers', providers: providerList() });
       return;
     }
     case 'ai_config_get': {
-      send(ws, { type: 'ai_config', config: aiConfigStore.getPublic() });
-      return;
-    }
-    case 'ai_config_set': {
-      const cfg = Object.assign({}, msg.config || {});
-      if (typeof msg.apiKey === 'string' && msg.apiKey.trim()) cfg.apiKey = msg.apiKey;
-      const pub = aiConfigStore.set(cfg);
-      broadcast({ type: 'ai_config', config: pub });  // 广播给所有标签页/客户端
-      return;
-    }
-    case 'ai_config_clear_key': {
-      const pub = aiConfigStore.clearKey();
-      broadcast({ type: 'ai_config', config: pub });
+      send(ws, { type: 'ai_config', config: aiDefaultsPublic() });
       return;
     }
     // ---------- 故障速查 ----------
@@ -511,6 +515,10 @@ async function handleClientMessage(ws, msg) {
         });
         return;
       }
+      if (DEPRECATED_TYPES[msg.type]) {
+        send(ws, { type: 'error', message: DEPRECATED_TYPES[msg.type] });
+        return;
+      }
       send(ws, { type: 'error', message: '未知消息类型: ' + msg.type });
   }
 }
@@ -524,6 +532,10 @@ server.listen(PORT, HOST, () => {
   if (STATS_DISABLED) console.log('使用统计已关闭 (STATS_DISABLED=1)');
   else if (STATS_TOKEN) console.log('使用统计已启用: /stats?token=*** 查看仪表盘');
   else console.log('使用统计收集中 (设置 STATS_TOKEN 后可通过 /stats 查看仪表盘)');
+  const serverAi = resolveAi({}, AI_DEFAULTS);
+  if (serverAi.source === 'server' && serverAi.model) {
+    console.log(`已配置服务端默认 AI (${serverAi.provider}/${serverAi.model}), 供未自带 Key 的访客使用`);
+  }
   const wantOpen = process.argv.includes('--open') || (process.pkg && !process.argv.includes('--no-open'));
   if (wantOpen) openBrowser(`http://localhost:${PORT}`);
 });
