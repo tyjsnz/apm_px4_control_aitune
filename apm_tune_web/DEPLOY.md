@@ -40,7 +40,7 @@ docker compose up -d --build
 APM_DOMAIN=192.168.1.100 docker compose --profile tls up -d
 # 浏览器首次访问需在警告页选择"继续访问"(自签证书)
 
-# 3b. 公网域名场景: 删掉 Caddyfile 中的 `tls internal` 一行, Caddy 会自动签发 Let's Encrypt 证书
+# 3b. 公网域名场景 (可选): 申请正式免费证书让浏览器无警告, 见下方「正式 HTTPS 证书」一节
 APM_DOMAIN=tune.example.com docker compose --profile tls up -d
 ```
 
@@ -82,7 +82,7 @@ docker compose --profile tls up -d
 - 云服务器**安全组**和本机防火墙都要放行该端口; `AUTH_USER`/`AUTH_PASS` 必设
 - **不要用浏览器受限端口**: Chrome/Edge/Firefox 对 `6000-6005`、`6665-6669`、`10080` 等端口直接拒绝加载(报 `ERR_UNSAFE_PORT`), 推荐 `8443` / `9443` / `6443`
 - 站点按域名匹配: **域名必须能解析到服务器**(用 IP 访问会连接被拒), 先在 DNS 添加 A 记录
-- Caddyfile 保留 `tls internal` 时为自建 CA 证书: 首次访问浏览器显示"不安全", 点「高级 → 继续前往」即可(Web Serial 仍可用); 去掉该行则自动申请 Let's Encrypt(需域名 80/443 可达且已备案)
+- Caddyfile 的 `tls.conf` 默认 `tls internal` 时为自建 CA 证书: 首次访问浏览器显示"不安全", 点「高级 → 继续前往」即可(Web Serial 仍可用); 按「正式 HTTPS 证书」一节切换到 Let's Encrypt 后浏览器无警告(需域名 80 端口可达或用 DNS-01)
 
 
 ## 数据持久化
@@ -99,6 +99,30 @@ docker compose --profile tls up -d
 - 用自带 Caddy profile(见快速部署)最省事;也可以用 Nginx/Traefik 替代,只需反代到 `apm-tune:3000`
 - 若只在本机浏览器使用,`http://localhost:3000` 本身就是安全上下文,可免 HTTPS
 - WebSocket 会自动随反代透传(路径为根路径 `/`)
+- TLS 证书策略在 `tls.conf`(被 Caddyfile import):默认 `tls internal` 自建 CA;改一行即可切换到正式证书(见下节)
+
+## 正式 HTTPS 证书 (免浏览器警告, Let's Encrypt 免费)
+
+自建 CA 证书首次访问会弹"不安全"警告,正式对外使用建议换成 Let's Encrypt:
+
+```bash
+# 1. 签发 (服务器 80 端口需外网可达; 复用已装的 acme.sh)
+/root/.acme.sh/acme.sh --issue -d 你的域名 --webroot /www/server/nginx/html
+
+# 2. 安装到项目 tls/ 目录, 并配置续签后自动 reload Caddy
+/root/.acme.sh/acme.sh --install-cert -d 你的域名 \
+  --fullchain-file /www/wwwroot/你的目录/tls/fullchain.pem \
+  --key-file /www/wwwroot/你的目录/tls/privkey.pem \
+  --reloadcmd "docker exec 你的caddy容器名 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || docker restart 你的caddy容器名"
+
+# 3. tls.conf 切换为文件证书并重建
+echo "tls /etc/caddy/tls/fullchain.pem /etc/caddy/tls/privkey.pem" > tls.conf
+docker compose --profile tls up -d
+```
+
+- acme.sh 已内置 cron 每天检查,到期前自动续签并执行 reloadcmd,无需手工干预
+- 证书有效期 90 天(LE);80 端口不可用的服务器改用 DNS-01:`--issue -d 域名 --dns dns_ali`(需阿里云 AK)
+- `tls/` 目录含私钥,已加入 .gitignore,勿入库
 
 ## 使用流程
 

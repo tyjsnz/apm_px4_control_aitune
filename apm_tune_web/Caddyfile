@@ -1,8 +1,12 @@
 # AP Tune HTTPS 反代配置 (docker compose --profile tls 使用)
 # 说明:
-#   - tls internal 表示 Caddy 自签证书 (局域网/测试); 公网有域名时删掉该行即可自动签发 Let's Encrypt 证书
-#   - 域名/IP 通过环境变量 APM_DOMAIN 注入
+#   - 证书策略由 tls.conf 决定 (本文件 import 它), 默认 tls internal 自签;
+#     有正式证书时把 tls.conf 改为:
+#       tls /etc/caddy/tls/fullchain.pem /etc/caddy/tls/privkey.pem
+#     (compose 已挂载 ./tls 目录到 /etc/caddy/tls, acme.sh --install-cert
+#      可直接写入该目录, 续签 reloadcmd 重启 Caddy 生效)
+#   - 域名/IP 通过环境变量 APM_DOMAIN 注入, 支持带端口 (如 tune.example.com:8443)
 {$APM_DOMAIN:localhost} {
-    tls internal
+    import tls.conf
     reverse_proxy apm-tune:3000
 }

@@ -39,6 +39,8 @@ services:
       - APM_DOMAIN=${APM_DOMAIN:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls.conf:/etc/caddy/tls.conf:ro   # TLS 证书策略 (默认 tls internal)
+      - ./tls:/etc/caddy/tls:ro             # 正式证书目录 (acme.sh --install-cert 写入)
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
