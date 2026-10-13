@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
+const SIM = path.join(ROOT, 'sim');
 
 const STEPS = [
   ['语法检查 (server/lib/public)', 'node', ['-e', `
@@ -37,13 +38,15 @@ const STEPS = [
     'node test/mavlink_roundtrip.js gen && python3 test/pymavlink_roundtrip.py gen && python3 test/pymavlink_roundtrip.py check && node test/mavlink_roundtrip.js check']],
   ['ParamLink 单测', 'node', ['test/paramlink.test.js']],
   ['PX4 集成 (进程内模拟器)', 'node', ['test/px4.test.js']],
+  ['FPV 仿真台单测', 'bash', ['-c', 'node test/selftest.js && node test/simtest.js && node test/contract.js'], SIM],
+  ['FPV 仿真台挂载集成', 'node', ['test/sim_mount.test.js']],
   ['端到端集成 (pty 模拟飞控)', 'node', ['test/e2e.test.js']],
 ];
 
 let failed = 0;
-for (const [name, cmd, args] of STEPS) {
+for (const [name, cmd, args, cwd] of STEPS) {
   process.stdout.write(`\n=== ${name} ===\n`);
-  const res = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', env: process.env, shell: false });
+  const res = spawnSync(cmd, args, { cwd: cwd || ROOT, stdio: 'inherit', env: process.env, shell: false });
   if (res.status !== 0) {
     failed++;
     console.log(`[失败] ${name} (exit=${res.status})`);

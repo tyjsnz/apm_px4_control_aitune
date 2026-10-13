@@ -18,6 +18,7 @@ import { THRUST_SYSTEM_PROMPT, buildThrustUserPrompt } from './lib/thrustai.js';
 import { createFaultStore } from './lib/faultstore.js';
 import { createStatsStore, renderStatsHtml } from './lib/stats.js';
 import { aiChat, providerList, isKeyOptional, resolveAi } from './lib/ai.js';
+import { simHandler } from './sim/server/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -104,6 +105,14 @@ app.use((req, res, next) => {
   if (checkAuth(req)) return next();
   res.set('WWW-Authenticate', 'Basic realm="apm-tune"');
   return res.status(401).send('需要认证');
+});
+
+// FPV 仿真台 (sim/, 零依赖): 同进程挂载在 /sim/, Express 挂载时已剥离前缀,
+// simHandler 内部按 "/" + "/api/*" 路由; 访问 /sim (无斜杠) 302 到 /sim/,
+// 保证页面内相对资源 (style.css/app.js/api/...) 解析到 /sim/ 下。
+app.use('/sim', (req, res) => {
+  if (req.originalUrl.split('?')[0] === '/sim') return res.redirect(302, '/sim/');
+  return simHandler(req, res);
 });
 
 app.use(express.static(path.join(__dirname, 'public')));

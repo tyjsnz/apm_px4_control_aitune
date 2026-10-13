@@ -28,10 +28,11 @@ for (const f of files) {
   }
 }
 
-// 检查 HTML 引用的脚本/样式文件存在
+// 检查 HTML 引用的脚本/样式文件存在 (以 / 开头的是站内路由, 如 /sim/, 不是 public 下的文件)
 for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
   const ref = m[1];
   if (/^https?:/.test(ref)) continue;
+  if (ref.startsWith('/')) continue;
   const p = path.join(PUB, ref);
   if (!fs.existsSync(p)) errs.push(`index.html: 引用文件不存在 ${ref}`);
 }

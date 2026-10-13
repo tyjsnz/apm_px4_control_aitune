@@ -125,6 +125,12 @@ test/      selftest（单元）/ simtest（端到端）/ contract（数据契约
 
 无构建步骤、无 node_modules，部署即复制目录。
 
+> **首选：随「扶摇 FuyaoTune」主应用一起部署** — 本目录已并入 `apm_tune_web/`，
+> 由 `server.js` 同进程挂载在 **`/sim/`**(零配置、复用主站的端口/证书/认证)。
+> 详见 [`../DEPLOY.md`](../DEPLOY.md) 的「FPV 仿真台 (/sim/)」一节。
+> 前端 API 为相对路径,挂载态(`/sim/api/*`)与独立态(`/api/*`)天然兼容。
+> 以下为独立部署的备选方式。
+
 **pm2（推荐）**
 
 ```bash

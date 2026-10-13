@@ -8,7 +8,7 @@
 // ============================================================
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { simulate, PRESETS, normalize } from '../core/simulate.js';
 import { tuningMeta } from '../core/tuning.js';
@@ -80,7 +80,11 @@ async function serveStatic(req, res, urlPath) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+/**
+ * 仿真请求处理器 (导出供主应用挂载: app.use('/sim', simHandler);
+ * Express 挂载时会自动剥离 /sim 前缀, 独立运行时 req.url 即完整路径)。
+ */
+export async function simHandler(req, res) {
   const t0 = Date.now();
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -124,17 +128,22 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) json(res, 500, { error: err.message || 'Internal Server Error' });
     else res.end();
   }
-});
+}
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`端口 ${PORT} 已被占用，可用 PORT=8081 npm start 指定其他端口`);
-    process.exit(1);
-  }
-  throw err;
-});
+// ---------- 独立运行 (node sim/server/index.js 或 npm start); 被主应用 import 时不起监听 ----------
+const isMain = !!process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 
-server.listen(PORT, () => {
-  console.log(`FPV 仿真服务已启动: http://localhost:${PORT}`);
-  console.log(`  API: POST /api/simulate | GET /api/presets | GET /api/tuning | GET /api/demo?preset=default`);
-});
+if (isMain) {
+  const server = http.createServer(simHandler);
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`端口 ${PORT} 已被占用，可用 PORT=8081 npm start 指定其他端口`);
+      process.exit(1);
+    }
+    throw err;
+  });
+  server.listen(PORT, () => {
+    console.log(`FPV 仿真服务已启动: http://localhost:${PORT}`);
+    console.log(`  API: POST /api/simulate | GET /api/presets | GET /api/tuning | GET /api/demo?preset=default`);
+  });
+}

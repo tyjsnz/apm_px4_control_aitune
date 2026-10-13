@@ -26,7 +26,7 @@ const FIELDS = ['frameId', 'wingId', 'rocketId', 'motorType', 'escType', 'rotorC
 /* ---------------- 初始化 ---------------- */
 async function init() {
   try {
-    const r = await fetch('/api/presets');
+    const r = await fetch('api/presets') // 相对路径：兼容独立运行(/)与主应用挂载(/sim/);
     const j = await r.json();
     state.presets = j.presets;
     state.demoConfigs = j.demoConfigs || {};
@@ -161,7 +161,7 @@ const TUNING = { meta: null, dirty: new Map() };   // dirty: key → 数值（�
 
 async function loadTuning() {
   try {
-    const r = await fetch('/api/tuning');
+    const r = await fetch('api/tuning');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     TUNING.meta = await r.json();
     buildTuning();
@@ -268,7 +268,7 @@ async function run() {
   setStatus('BEMT / 工况 / 结构 / 控制 求解中…');
   const t0 = performance.now();
   try {
-    const res = await fetch('/api/simulate', {
+    const res = await fetch('api/simulate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(collect()),
@@ -302,7 +302,7 @@ async function runCompare() {
   try {
     const cfg = collect();
     delete cfg.tuning;                       // 基准 = 全部默认系数
-    const res = await fetch('/api/simulate', {
+    const res = await fetch('api/simulate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg),
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);

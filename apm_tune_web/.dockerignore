@@ -9,6 +9,7 @@ logs
 faults
 config
 test
+sim/test
 scripts
 *.log
 docker-compose.yml
