@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>导引算法实验室 — 扶摇 FuyaoTune</title>
+<meta name="description" content="导弹导引仿真: 比例导引(PN) vs 纯跟踪(PP), 交互式 2D 战场、R(t)/a(t) 曲线与分段制导可视化。">
+<link rel="stylesheet" href="guide.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="logo">🎯</span>
+    <span class="name">导引算法实验室</span>
+    <span class="sub">Guidance Lab</span>
+  </a>
+  <nav class="nav">
+    <a href="/">🏠 主页</a>
+    <a href="/app/">🎛 调参</a>
+    <a href="/sim/">🖥 仿真台</a>
+    <a href="docs.html">📚 理论文档</a>
+    <button id="panelToggle" class="panel-toggle" type="button">⚙ 参数</button>
+  </nav>
+</header>
+
+<main class="layout">
+  <section class="stage">
+    <div class="stage-canvas">
+      <canvas id="field"></canvas>
+    </div>
+    <div class="stage-plot">
+      <canvas id="plot"></canvas>
+    </div>
+    <div class="statusbar" id="statusbar">t=0.00s  [就绪]</div>
+  </section>
+
+  <aside class="sidebar" id="panel" aria-label="控制面板"></aside>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
