@@ -1,0 +1,120 @@
+/* 扶摇 FuyaoTune 入口页 (零构建纯 CSS, 深色主题与主应用/仿真台一致) */
+:root {
+  --bg: #0b0f17;
+  --bg-soft: #101624;
+  --card: #131a2a;
+  --line: #223047;
+  --text: #dce6f5;
+  --dim: #8b9bb4;
+  --accent: #4a9eff;
+  --accent2: #35d0ba;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: radial-gradient(1200px 600px at 70% -10%, rgba(74, 158, 255, 0.10), transparent 60%),
+              radial-gradient(900px 500px at 10% 10%, rgba(53, 208, 186, 0.07), transparent 55%),
+              var(--bg);
+  color: var(--text);
+  font-family: "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.65;
+}
+
+main { max-width: 1080px; margin: 0 auto; padding: 0 20px 40px; }
+
+a { color: var(--accent); text-decoration: none; }
+
+/* ---------------- Hero ---------------- */
+.hero { padding: 64px 20px 28px; text-align: center; }
+.hero-inner { max-width: 860px; margin: 0 auto; }
+
+.hero-brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 18px; }
+.hero-logo { width: 34px; height: 34px; }
+.hero-name { font-size: 20px; font-weight: 700; letter-spacing: 1px; color: var(--text); }
+.hero-name em { font-style: normal; color: var(--accent); }
+
+.hero h1 { font-size: 34px; line-height: 1.35; font-weight: 750; letter-spacing: .5px; }
+.grad {
+  background: linear-gradient(92deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+.hero-sub { color: var(--dim); font-size: 15px; margin: 16px auto 26px; max-width: 640px; }
+
+.hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
+.btn {
+  display: inline-block; padding: 11px 22px; border-radius: 10px;
+  font-size: 15px; font-weight: 600; border: 1px solid transparent; transition: all .15s;
+}
+.btn.primary {
+  background: linear-gradient(92deg, var(--accent), #2f7fe0); color: #fff;
+  box-shadow: 0 6px 22px rgba(74, 158, 255, .28);
+}
+.btn.primary:hover { transform: translateY(-1px); box-shadow: 0 9px 26px rgba(74, 158, 255, .38); }
+.btn.ghost { color: var(--text); border-color: var(--line); background: rgba(255, 255, 255, .02); }
+.btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+.hero-badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.hero-badges span {
+  font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+  border-radius: 20px; padding: 3px 12px; background: rgba(255, 255, 255, .02);
+}
+
+/* ---------------- 卡片通用 ---------------- */
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 24px;
+}
+
+/* ---------------- 两个产品 ---------------- */
+.products { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 26px 0 30px; }
+.product { display: block; color: var(--text); transition: all .18s; }
+.product:hover { border-color: var(--accent); transform: translateY(-3px); box-shadow: 0 12px 30px rgba(0, 0, 0, .35); }
+
+.product-head { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+.product-emoji { font-size: 34px; }
+.product h2 { font-size: 19px; font-weight: 700; }
+.product h2 small { font-size: 12px; color: var(--dim); font-weight: 500; margin-left: 8px; }
+.product-tag { font-size: 13px; color: var(--accent2); }
+
+.feat { list-style: none; }
+.feat li {
+  font-size: 13.5px; color: var(--dim); padding: 6px 0 6px 20px; position: relative;
+}
+.feat li::before { content: "✓"; position: absolute; left: 0; color: var(--accent2); font-weight: 700; }
+.feat b { color: var(--text); font-weight: 600; }
+
+.card-go { display: inline-block; margin-top: 14px; font-size: 14px; font-weight: 600; color: var(--accent); }
+
+/* ---------------- 特性四宫格 ---------------- */
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 30px; }
+.mini h3 { font-size: 15px; margin-bottom: 8px; }
+.mini p { font-size: 13px; color: var(--dim); }
+
+/* ---------------- 开源 ---------------- */
+.oss { margin-bottom: 30px; }
+.oss h2 { font-size: 20px; margin-bottom: 10px; }
+.oss p { font-size: 14px; color: var(--dim); margin-bottom: 12px; }
+.oss b { color: var(--text); }
+.oss-links { display: flex; gap: 12px; flex-wrap: wrap; margin: 14px 0 10px; }
+.oss-links .btn { font-size: 13.5px; padding: 9px 16px; }
+.oss-note { font-size: 13px; }
+
+/* ---------------- 路线图 ---------------- */
+.roadmap h2 { font-size: 20px; margin-bottom: 14px; }
+.road { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+
+/* ---------------- 页脚 ---------------- */
+footer {
+  border-top: 1px solid var(--line); margin-top: 40px; padding: 26px 20px 34px;
+  text-align: center; font-size: 13px; color: var(--dim);
+}
+.foot-sub { margin-top: 6px; font-size: 12px; opacity: .75; }
+
+/* ---------------- 响应式 ---------------- */
+@media (max-width: 880px) {
+  .hero h1 { font-size: 26px; }
+  .products, .grid4, .road { grid-template-columns: 1fr; }
+  .hero { padding-top: 44px; }
+}

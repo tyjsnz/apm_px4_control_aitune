@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUB = path.join(__dirname, '..', 'public');
 
+// 调参应用页面在 public/index.html; 根路径 / 由 public/landing.html 提供 (产品入口页)
 const html = fs.readFileSync(path.join(PUB, 'index.html'), 'utf8');
 const htmlIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
 
@@ -19,8 +20,7 @@ let checked = 0;
 
 for (const f of files) {
   const src = fs.readFileSync(path.join(PUB, f), 'utf8');
-  const refs = new Set();
-  for (const m of src.matchAll(/getElementById\(\s*'([^']+)'\s*\)/g)) refs.add(m[1]);
+  const refs = new Set();  for (const m of src.matchAll(/getElementById\(\s*'([^']+)'\s*\)/g)) refs.add(m[1]);
   for (const m of src.matchAll(/\$\(\s*'([^']+)'\s*\)/g)) refs.add(m[1]);
   for (const id of refs) {
     checked++;

@@ -50,7 +50,7 @@ async function main() {
       `${r.status} loc=${r.headers.get('location')}`);
 
     r = await httpGet(PORT, '/sim/');
-    check('/sim/ 返回仿真台页面', r.status === 200 && /app\.js/.test(r.text) && /扶摇调参/.test(r.text),
+    check('/sim/ 返回仿真台页面', r.status === 200 && /app\.js/.test(r.text) && /扶摇主页/.test(r.text),
       String(r.status));
 
     r = await httpGet(PORT, '/sim/style.css');
@@ -84,7 +84,19 @@ async function main() {
 
     // ---------- 3. 主应用不受影响, API 前缀互不串 ----------
     r = await httpGet(PORT, '/');
-    check('主站首页仍正常', r.status === 200 && /扶摇 FuyaoTune/.test(r.text), String(r.status));
+    check('根路径返回产品入口页', r.status === 200 && /FPV 飞控调参与整机仿真工作站/.test(r.text)
+      && /href="\/app\/"/.test(r.text) && /href="\/sim\/"/.test(r.text), String(r.status));
+
+    r = await httpGet(PORT, '/app/');
+    check('/app/ 返回调参工作台', r.status === 200 && /btnConnect/.test(r.text)
+      && /扶摇 FuyaoTune/.test(r.text), String(r.status));
+
+    r = await httpGet(PORT, '/app');
+    check('/app (无斜杠) 301 到 /app/', r.status === 301 && r.headers.get('location') === '/app/',
+      `${r.status} loc=${r.headers.get('location')}`);
+
+    r = await httpGet(PORT, '/style.css');
+    check('工作台页面的根相对资源可取 (/style.css)', r.status === 200, String(r.status));
 
     r = await httpGet(PORT, '/lib/fcops.js');
     check('主站 /lib 静态资源仍正常', r.status === 200, String(r.status));

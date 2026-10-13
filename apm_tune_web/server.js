@@ -115,6 +115,12 @@ app.use('/sim', (req, res) => {
   return simHandler(req, res);
 });
 
+// 产品入口页: 根路径返回 landing.html (两个子系统的统一介绍与跳转页, 资源引用为绝对路径)
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
+
+// 调参工作台: /app 与 / 再挂同一份 public/, 页面内相对资源在 /app/ 下解析后仍能取到
+app.use('/app', express.static(path.join(__dirname, 'public')));
+
 app.use(express.static(path.join(__dirname, 'public')));
 // 协议层模块以 ES Module 形式提供给浏览器 (lib/fcops.js + lib/paramlink.js + lib/mavlink.js)
 app.use('/lib', express.static(path.join(__dirname, 'lib')));

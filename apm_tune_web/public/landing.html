@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>扶摇 FuyaoTune · FPV 飞控调参与整机仿真工作站</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="description" content="扶摇 FuyaoTune — 开源免费的 FPV 工作站:浏览器 Web Serial 直连 ArduPilot/PX4 一键调参,全栈物理仿真台从装配参数一键推演到稳定高效飞行。免安装、开源 MIT、数据不出本机。" />
+  <link rel="stylesheet" href="/landing.css" />
+</head>
+<body>
+
+  <!-- ================= Hero ================= -->
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="hero-brand">
+        <img class="hero-logo" src="/favicon.svg" alt="" />
+        <span class="hero-name">扶摇 <em>FuyaoTune</em></span>
+      </div>
+      <h1>浏览器里的 <span class="grad">FPV 飞控调参</span> 与 <span class="grad">整机仿真</span> 工作站</h1>
+      <p class="hero-sub">
+        免安装、免驱动、免地面站 —— 打开网页,USB 线直连飞控完成调参;
+        装配参数填进去,结构 / 气动 / 能量 / 控制全栈物理仿真一键推演。
+        开源免费,串口数据全程不出你的浏览器。
+      </p>
+      <div class="hero-cta">
+        <a class="btn primary" href="/app/">🎛 扶摇调参 — 连接飞控</a>
+        <a class="btn ghost" href="/sim/">🚀 FPV 仿真台 — 开始仿真</a>
+      </div>
+      <div class="hero-badges">
+        <span>MIT 开源</span><span>零安装</span><span>零依赖</span><span>ArduPilot · PX4 双飞控</span><span>数据不出本机</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ================= 两个产品 ================= -->
+    <section class="products">
+      <a class="card product" href="/app/">
+        <div class="product-head">
+          <span class="product-emoji">🎛</span>
+          <div>
+            <h2>扶摇 FuyaoTune <small>调参助手</small></h2>
+            <p class="product-tag">一键首飞,扶摇直上</p>
+          </div>
+        </div>
+        <ul class="feat">
+          <li><b>Web Serial 直连</b> — 浏览器 USB 直连飞控(CH340/CP210x 免驱),不用装驱动、不用开地面站</li>
+          <li><b>一键首飞</b> — 参数体检 → 首飞方案生成 → 写入前自动备份 → 逐项引导,新手也能安全起飞</li>
+          <li><b>参数速查</b> — ArduPilot / PX4 全量参数双向搜索、按飞行阶段筛选、悬停/前飞快速体检</li>
+          <li><b>日志 AI 分析</b> — DataFlash / ULog 拖进网页,AI 自动解析出图表与调参建议(自带 API Key,服务端不留存)</li>
+          <li><b>故障速查</b> — 现场故障现象 → 可能原因 → 处置步骤,AI 结合你机型上下文解答</li>
+          <li><b>备份与恢复</b> — 参数自动备份、全量导出,换机/炸机一键恢复</li>
+        </ul>
+        <span class="card-go">进入调参工作台 →</span>
+      </a>
+
+      <a class="card product" href="/sim/">
+        <div class="product-head">
+          <span class="product-emoji">🚀</span>
+          <div>
+            <h2>FPV 仿真台 <small>全栈物理仿真</small></h2>
+            <p class="product-tag">从装配参数到稳定高效飞行</p>
+          </div>
+        </div>
+        <ul class="feat">
+          <li><b>全栈物理</b> — 结构强度、空气动力(BEMT)、流体、能量链、噪音一次算完</li>
+          <li><b>控制仿真</b> — PID 闭环仿真,给出 P/D 初值、超调与调节时间</li>
+          <li><b>诊断报告</b> — 推重比 / 悬停油门 / 电池放电能力逐项体检,给出修复建议与改造方案</li>
+          <li><b>目标反向求解</b> — 给定速度/续航/噪音目标,自动扫描换电机、换桨、换电池的可行方案</li>
+          <li><b>三种型别</b> — 多旋翼(5寸竞速 ~ 12S八轴)、垂起火箭 VTOL、固定翼/滑翔机</li>
+          <li><b>8 套预设</b> — 选好整机一键演示,单次全栈仿真约 0.4~7 秒</li>
+        </ul>
+        <span class="card-go">进入仿真台 →</span>
+      </a>
+    </section>
+
+    <!-- ================= 特性 ================= -->
+    <section class="grid4">
+      <div class="card mini">
+        <h3>🔒 数据不出本机</h3>
+        <p>串口链路在浏览器内直连飞控,服务器只承担页面分发与你主动上传的备份/日志。AI 分析用你自己的 Key,服务端不保存任何密钥。</p>
+      </div>
+      <div class="card mini">
+        <h3>⚡ 免安装即开即用</h3>
+        <p>没有安装包、没有驱动、没有环境依赖。Chrome / Edge 打开 HTTPS 网页就能连飞控 —— 图书馆的电脑也能调参。</p>
+      </div>
+      <div class="card mini">
+        <h3>🔗 仿真与调参同域联动</h3>
+        <p>两个系统部署在同一站点:先在仿真台把桨/电机/电池方案算清楚,再进调参台把 PID 落到实机,思路不断档。</p>
+      </div>
+      <div class="card mini">
+        <h3>🏠 一键自部署</h3>
+        <p>Docker Compose 一条命令部署到自己的服务器(支持 nginx 前置反代 + Let's Encrypt 证书),数据完全自己持有。</p>
+      </div>
+    </section>
+
+    <!-- ================= 开源 ================= -->
+    <section class="card oss">
+      <h2>📖 开源免费,永远的社区版</h2>
+      <p>
+        扶摇 FuyaoTune 与 FPV 仿真台均以 <b>MIT License</b> 开源,代码托管在 GitHub。
+        工程上追求「零构建、零第三方依赖」:前端原生 JS,后端 Node 内置模块,仿真内核纯物理公式 ——
+        每一行逻辑都可以被审查、被学习、被改造。
+      </p>
+      <div class="oss-links">
+        <a class="btn ghost" href="https://github.com/tyjsnz/apm_px4_control_aitune" target="_blank" rel="noopener">GitHub 仓库 · tyjsnz/apm_px4_control_aitune</a>
+        <a class="btn ghost" href="https://github.com/tyjsnz/apm_px4_control_aitune/blob/main/apm_tune_web/DEPLOY.md" target="_blank" rel="noopener">自部署指南 DEPLOY.md</a>
+      </div>
+      <p class="oss-note">欢迎 Issue / PR / 一起打磨物理模型。商用闭源版不在计划内 —— 永远先有免费好用的社区版。</p>
+    </section>
+
+    <!-- ================= 路线图 ================= -->
+    <section class="roadmap">
+      <h2>🗺 路线图(随缘推进,欢迎许愿)</h2>
+      <div class="road">
+        <div class="card mini"><b>仿真 → 调参联动</b><p>仿真台输出的 PID 初值与动力方案,一键生成调参台的首飞方案。</p></div>
+        <div class="card mini"><b>多机队管理</b><p>多台飞机的参数快照、版本对比与批量体检。</p></div>
+        <div class="card mini"><b>AI 专家知识库</b><p>社区沉淀的调参案例与故障案例,变成可检索的经验库。</p></div>
+        <div class="card mini"><b>移动端适配</b><p>外场用手机/平板查看体检报告与故障速查。</p></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>© 2026 tyjsnz · 扶摇 FuyaoTune & FPV 仿真台 · <a href="https://github.com/tyjsnz/apm_px4_control_aitune" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+    <p class="foot-sub">鹏之徙于南冥也,水击三千里,抟扶摇而上者九万里。</p>
+  </footer>
+
+</body>
+</html>
