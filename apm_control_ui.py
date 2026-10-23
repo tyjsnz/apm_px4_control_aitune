@@ -70,6 +70,9 @@ except ImportError:
 # ============ 默认配置 ============
 DEFAULT_CONN = 'COM23'
 DEFAULT_BAUD = 57600
+# 仿真(SITL / Mission Planner)预设连接串, 下拉框顶部列出; 波特率对网络连接无效
+SITL_PRESETS = ['tcp:127.0.0.1:5762', 'tcp:127.0.0.1:5763',
+                'udp:127.0.0.1:14550']
 
 # ============ 串口配置持久化 ============
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'apm_ui_config.json')
@@ -1328,20 +1331,25 @@ class AmpUI(object):
         return True
 
     def on_refresh_ports(self):
-        """刷新可用串口列表"""
+        """刷新可用串口列表 (预设仿真连接串在最前, 便于直选)"""
         ports = get_available_ports()
+        values = list(SITL_PRESETS)
         if ports:
-            self.cmb_conn['values'] = [desc for _, desc in ports]
-            # 保持当前选择，如果不在列表中则选第一个
-            current = self.var_conn.get()
-            if current not in [d for _, d in ports]:
-                self.var_conn.set(ports[0][1])
+            values += [d for _, d in ports]
         else:
-            self.cmb_conn['values'] = ['(无可用串口)']
-            self.var_conn.set('(无可用串口)')
+            values.append('(无可用串口)')
+        self.cmb_conn['values'] = values
+        # 保留当前选择; 没有则回退到第一个串口(无串口才用首个预设)
+        current = self.var_conn.get().strip()
+        if current not in values:
+            if ports:
+                self.var_conn.set(ports[0][1])
+            else:
+                self.var_conn.set(SITL_PRESETS[0])
         # 日志组件可能尚未创建，安全检查
         if hasattr(self, 'txt_log') and self.txt_log:
-            self._log_line('🔍 串口列表已刷新，共 %d 个' % len(ports))
+            self._log_line('🔍 串口列表已刷新，共 %d 个 (仿真预设 %d 项)'
+                           % (len(ports), len(SITL_PRESETS)))
 
     def on_connect(self):
         if self.connected:
@@ -1504,12 +1512,14 @@ class AmpUI(object):
             self.var_link.set('连接失败')
 
     def _save_selected_port(self):
-        """从下拉框描述中提取设备名并保存"""
-        desc = self.var_conn.get()
-        if desc and ' - ' in desc:
-            device = desc.split(' - ')[0].strip()
-            if device:
-                save_last_port(device)
+        """保存本次成功连接的连接串 (串口描述取设备名, 网络串原样存)"""
+        desc = self.var_conn.get().strip()
+        if not desc or desc == '(无可用串口)':
+            return
+        # 从 "COM22 - 设备描述" 中提取设备名 COM22; 无描述则原样 (tcp:/udp: 等)
+        device = desc.split(' - ')[0].strip() if ' - ' in desc else desc
+        if device:
+            save_last_port(device)
 
     def on_disconnect(self):
         if self.action_busy.is_set():
