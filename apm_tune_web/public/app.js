@@ -296,6 +296,12 @@ function setFirmware(fw) {
   if (fw !== 'apm' && fw !== 'px4') return;
   if (firmware === fw) return;
   firmware = fw;
+  // 固件切换后官方参数元数据需重新拉取 (AP/PX4 是两份数据)
+  if (fwParamMeta.key !== paramMetaFileKey()) {
+    fwParamMeta.map = null;
+    fwParamMeta.loading = null;
+    fwParamMeta.tried = false;
+  }
   updateFirmwareBadge();
   if (connected) {
     renderCategories();
@@ -607,22 +613,22 @@ ws.onmessage = (e) => {
     }
   }
 
-  // 遥测数据
+  // 遥测数据 (顶部遥测条; 单位在 HTML 中单独的 tbar__unit 上)
   if (msg.type === 'global_position') {
     const lat = msg.lat / 1e7;
     const lon = msg.lon / 1e7;
-    document.getElementById('telLat').textContent = `纬度: ${lat.toFixed(7)}`;
-    document.getElementById('telLon').textContent = `经度: ${lon.toFixed(7)}`;
-    document.getElementById('telAlt').textContent = `高度: ${msg.relativeAlt / 100}m`;
+    document.getElementById('telLat').textContent = lat.toFixed(7);
+    document.getElementById('telLon').textContent = lon.toFixed(7);
+    document.getElementById('telAlt').textContent = (msg.relativeAlt / 100).toFixed(1);
   }
 
   if (msg.type === 'vfr_hud') {
-    document.getElementById('telSpeed').textContent = `速度: ${msg.groundspeed}m/s`;
+    document.getElementById('telSpeed').textContent = Number(msg.groundspeed).toFixed(1);
   }
 
   if (msg.type === 'sys_status') {
     if (msg.voltageBattery) {
-      document.getElementById('telBattery').textContent = `电池: ${(msg.voltageBattery / 1000).toFixed(1)}V`;
+      document.getElementById('telBattery').textContent = (msg.voltageBattery / 1000).toFixed(1);
     }
     if (msg.load !== undefined) {
       document.getElementById('loadPercent').textContent = (msg.load / 100).toFixed(0);
@@ -649,12 +655,20 @@ ws.onmessage = (e) => {
 
   // 一键首飞相关消息
   if (typeof OneTouch !== 'undefined') OneTouch.handleMessage(msg);
+  // 电机测试页 (拆桨实测起转)
+  if (window.MotorTest) MotorTest.onMsg(msg);
   // AI 配置 (服务商列表 + 服务端默认; Key 在浏览器本地)
   if (typeof AIConfig !== 'undefined') AIConfig.handleMessage(msg);
   // 备份恢复 / 日志分析相关消息
   if (typeof DataTools !== 'undefined') DataTools.handleMessage(msg);
   // 故障速查相关消息
   if (typeof Fault !== 'undefined') Fault.handleMessage(msg);
+  // 仪表盘 / 实时曲线 / 消息控制台 (monitor.js)
+  if (window.FcMonitor) FcMonitor.onMsg(msg);
+  // 传感器体检 (sensors.js)
+  if (window.SensorCheck) SensorCheck.onMsg(msg);
+  // 起飞就绪检查 (takeoffcheck.js)
+  if (window.TakeoffCheck) TakeoffCheck.onMsg(msg);
 };
 
 // ==================== UI 渲染 ====================
@@ -907,6 +921,67 @@ function fullParamMeta() {
   return map;
 }
 
+// ---------- 固件官方参数元数据 (懒加载, 补全量视图的描述/单位/范围) ----------
+// 数据由 scripts/gen_param_meta.py 生成 (ArduPilot autotest pdef + PX4 artifacts)
+const fwParamMeta = { key: null, map: null, loading: null, tried: false };
+
+function paramMetaFileKey() {
+  return firmware === 'px4' ? 'px4' : 'apm_copter';
+}
+
+function loadParamMeta() {
+  const key = paramMetaFileKey();
+  if (fwParamMeta.map && fwParamMeta.key === key) return Promise.resolve(fwParamMeta.map);
+  if (fwParamMeta.loading && fwParamMeta.key === key) return fwParamMeta.loading;
+  fwParamMeta.key = key;
+  fwParamMeta.loading = fetch('parammeta/' + key + '.json')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      fwParamMeta.map = (j && typeof j === 'object') ? j : null;
+      fwParamMeta.loading = null;
+      fwParamMeta.tried = true;
+      return fwParamMeta.map;
+    })
+    .catch(() => {
+      fwParamMeta.loading = null;
+      fwParamMeta.tried = true;
+      return null;
+    });
+  return fwParamMeta.loading;
+}
+
+function ensureParamMetaLoaded() {
+  // tried 防止加载失败后 renderParams↔ensure 互相触发死循环
+  if (fwParamMeta.map || fwParamMeta.loading || fwParamMeta.tried) return;
+  loadParamMeta().then(() => {
+    // 元数据到达后若仍在全量视图则刷新, 让占位行补上官方描述
+    if (fullParamsActive()) renderParams();
+  });
+}
+
+function firmwareParamEntry(namePlain) {
+  const m = fwParamMeta.map;
+  const e = m && m[namePlain];
+  return (e && typeof e === 'object') ? e : null;
+}
+
+/** 全量视图中"内置表未收录"参数的行: 官方元数据优先, 否则占位文案 */
+function buildUnlistedParamRow(namePlain) {
+  const e = firmwareParamEntry(namePlain);
+  if (!e) {
+    return buildParamRow({ name: namePlain, desc: '固件实读参数 (参数表未收录)', unit: '', noRange: true });
+  }
+  const parts = [];
+  if (e.n) parts.push(e.n);
+  if (e.lo !== undefined && e.hi !== undefined) parts.push('范围 ' + e.lo + '~' + e.hi);
+  const row = buildParamRow({ name: namePlain, desc: parts.join(' · '), unit: e.u || '', noRange: true });
+  if (e.d) {
+    const hint = row.querySelector('.param-hint');
+    if (hint) hint.title = e.d;   // 完整官方说明做悬停提示
+  }
+  return row;
+}
+
 function renderFullParams(search, starOnly) {
   const panel = document.getElementById('paramPanel');
   const names = Object.keys(paramCache).sort();
@@ -914,6 +989,7 @@ function renderFullParams(search, starOnly) {
     panel.innerHTML = '<div class="empty-state"><p>尚未读取到飞控参数</p><p class="hint">连接后自动拉取, 也可点击「刷新参数」</p></div>';
     return;
   }
+  ensureParamMetaLoaded();   // 描述缺失时后台拉官方元数据, 到达后自动刷新本视图
   const metaMap = fullParamMeta();
 
   const groupDiv = document.createElement('div');
@@ -939,7 +1015,7 @@ function renderFullParams(search, starOnly) {
     shown++;
     groupDiv.appendChild(known
       ? buildParamRow({ name: known.name, desc: known.desc, unit: known.unit, range: getItemRange(known) })
-      : buildParamRow({ name: plain, desc: '固件实读参数 (参数表未收录)', unit: '', noRange: true }));
+      : buildUnlistedParamRow(plain));
   }
 
   if (!shown) {
@@ -963,7 +1039,7 @@ function appendFullParamRow(namePlain) {
   const known = metaMap.get(namePlain);
   const row = known
     ? buildParamRow({ name: known.name, desc: known.desc, unit: known.unit, range: getItemRange(known) })
-    : buildParamRow({ name: namePlain, desc: '固件实读参数 (参数表未收录)', unit: '', noRange: true });
+    : buildUnlistedParamRow(namePlain);
 
   // 按参数名排序插入
   const rows = [...group.querySelectorAll('.param-row')];
@@ -1114,6 +1190,13 @@ function drawTcCurve(values) {
   ctx.fillText(`期望推力 → 油门指令 (EXPO=${expo})`, pad.l - 30, 11);
 }
 
+// 主题切换: 推力曲线已逐次读 CSS 变量, 触发一次重绘即可
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('fy:theme', () => {
+    try { renderThrustCheck(); } catch (e) { /* 忽略 */ }
+  });
+}
+
 /** 手工输入框: 仅回填无手填覆盖的参数 */
 function tcSyncInputs(values) {
   for (const n of window.ThrustCheck.TC_EDITABLE) {
@@ -1234,9 +1317,14 @@ function switchView(name) {
     t.classList.toggle('active', t.dataset.view === name);
   });
   const map = {
+    dashboard: 'viewDashboard',
     params: 'viewParams',
     thrust: 'viewThrust',
+    sensors: 'viewSensors',
     onetouch: 'viewOnetouch',
+    motortest: 'viewMotorTest',
+    charts: 'viewCharts',
+    console: 'viewConsole',
     backup: 'viewBackup',
     logs: 'viewLogs',
     fault: 'viewFault',
@@ -1247,6 +1335,10 @@ function switchView(name) {
   }
   if (name === 'backup' && typeof DataTools !== 'undefined') DataTools.handleMessage({ type: 'noop' });
   if (name === 'fault' && typeof Fault !== 'undefined') Fault.onShow();
+  if (window.FcMonitor) FcMonitor.onView(name);   // 仪表盘重绘 / 曲线与消息台启停轮询
+  if (window.SensorCheck) SensorCheck.onView(name); // 传感器体检: 进入重绘 / 离开停止采样
+  if (window.MotorTest) MotorTest.onView(name);  // 电机测试: 进入刷新按钮状态
+  if (window.TakeoffCheck) TakeoffCheck.onView(name); // 起飞就绪: 进入仪表盘时刷新判定
 }
 for (const t of document.querySelectorAll('.view-tab')) {
   t.onclick = () => switchView(t.dataset.view);

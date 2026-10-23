@@ -35,5 +35,16 @@ check('空字段不生成章节', !/## 故障现象/.test(sparse) && !/## 已尝
 check('空标题仍可生成', buildFaultUserPrompt({}).includes('# 飞控故障记录'));
 check('tags 字符串也支持', buildFaultUserPrompt({ tags: 'a,b' }).includes('a,b'));
 
+// 内置警告库参考条目 (hints 可选参数)
+const hinted = buildFaultUserPrompt({ title: '气压计报错' }, [
+  { en: 'Baro not healthy', zh: '气压计异常', cause: '传感器未输出数据', fix: '重启飞控, 持续则更换' },
+]);
+check('hints 生成参考段', /## 内置警告库参考资料/.test(hinted) && hinted.includes('Baro not healthy'));
+check('hints 含原因与处理', hinted.includes('原因: 传感器未输出数据') && hinted.includes('处理: 重启飞控'));
+check('hints 不影响结尾指令', hinted.includes('请基于以上信息给出故障分析报告'));
+check('无 hints 不生成参考段', !/内置警告库参考资料/.test(full));
+check('hints 非数组时容错', buildFaultUserPrompt({ title: 'x' }, 'not-array').includes('# 飞控故障记录'));
+check('hints 空数组不生成参考段', !/内置警告库参考资料/.test(buildFaultUserPrompt({ title: 'x' }, [])));
+
 console.log(failures === 0 ? '\n故障 AI Prompt 单测通过' : `\n${failures} 项失败`);
 process.exit(failures === 0 ? 0 : 1);

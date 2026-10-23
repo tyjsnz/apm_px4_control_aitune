@@ -56,19 +56,36 @@ CASES = [
                                   rpm=[0, 1500, 1600, 1700],
                                   count=[1, 2, 3, 4],
                                   temperature=[30, 31, 32, 33])),
+    # 传感器体检
+    ('VIBRATION', dict(time_usec=123456789, vibration_x=1.25,
+                       vibration_y=2.5, vibration_z=0.75,
+                       clipping_0=0, clipping_1=1, clipping_2=2)),
+    ('EKF_STATUS_REPORT', dict(velocity_variance=0.1, pos_horiz_variance=0.2,
+                               pos_vert_variance=0.3, compass_variance=0.05,
+                               terrain_alt_variance=0.4, flags=47,
+                               airspeed_variance=0.01)),
+    ('SCALED_IMU2', dict(time_boot_ms=1000, xacc=100, yacc=-200, zacc=1000,
+                         xgyro=10, ygyro=-20, zgyro=30, xmag=120, ymag=230,
+                         zmag=-400, temperature=3500)),
+    ('SCALED_PRESSURE', dict(time_boot_ms=2000, press_abs=1013.25,
+                             press_diff=0.5, temperature=2500,
+                             temperature_press_diff=0)),
+    ('RAW_IMU', dict(time_usec=987654321, xacc=100, yacc=-200, zacc=1000,
+                     xgyro=10, ygyro=-20, zgyro=30, xmag=120, ymag=230,
+                     zmag=-400, id=0, temperature=3500)),
 ]
 
 SYSID, COMPID = 255, 190
 
 
 def dialect_for(name, version):
-    if name == 'ESC_TELEMETRY_1_TO_4':
-        return a2
+    if name in ('ESC_TELEMETRY_1_TO_4', 'EKF_STATUS_REPORT'):
+        return a2  # 仅 ardupilotmega 方言含这些消息
     return c2 if version == 2 else c1
 
 
 def msg_class(dialect, name):
-    return getattr(dialect, 'MAVLink_%s_message' % name.lower())
+    return getattr(dialect, 'MAVLink_%s_message' % name.lower(), None)
 
 
 def make_mav(dialect, seq):
@@ -104,8 +121,12 @@ def gen():
     seq = 0
     for name, fields in CASES:
         for version in (1, 2):
+            if version == 1 and msg_class(c1, name) is None:
+                continue  # v10 common 无此消息 (如 EKF_STATUS_REPORT), 跳过 v1
             dialect = dialect_for(name, version)
             cls = msg_class(dialect, name)
+            if cls is None:
+                continue
             if cls.id > 255 and version == 1:
                 continue
             args = [fields[f].encode('ascii') if isinstance(fields[f], str) else fields[f]
@@ -151,7 +172,12 @@ def check():
             errs.append('%s: sysid=%s' % (f['name'], msg.get_srcSystem()))
         if getattr(msg, 'get_srcComponent', lambda: None)() != f.get('compid'):
             errs.append('%s: compid=%s' % (f['name'], msg.get_srcComponent()))
+        # 本机 pymavlink 方言可能落后于公共方言(缺 MAVLink2 扩展字段),
+        # 未声明的字段无法解析, 只比对本地方言已知的字段。
+        known = set(msg_class(dialect, f['name']).fieldnames)
         for k, want in norm_v1(dialect, f['name'], f['version'], f['fields']).items():
+            if k not in known:
+                continue
             got = getattr(msg, k, None)
             if not num_eq(got, want):
                 errs.append('v%d %s.%s: got=%r want=%r'

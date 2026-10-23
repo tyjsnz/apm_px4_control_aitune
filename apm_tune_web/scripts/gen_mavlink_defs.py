@@ -35,6 +35,7 @@ WANTED = [
     'GLOBAL_POSITION_INT',
     'VFR_HUD',
     'SYS_STATUS',
+    'GPS_RAW_INT',
     'AUTOPILOT_VERSION',
     'ESC_TELEMETRY_1_TO_4',
     'LOG_REQUEST_LIST',
@@ -43,9 +44,25 @@ WANTED = [
     'LOG_DATA',
     'LOG_ERASE',
     'LOG_REQUEST_END',
+    # 传感器体检
+    'VIBRATION',
+    'EKF_STATUS_REPORT',
+    'SCALED_IMU2',
+    'SCALED_PRESSURE',
+    'RAW_IMU',
 ]
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'lib', 'mavlink_defs.js')
+
+# 本机 pymavlink 可能落后于 MAVLink 公共方言(common.xml)。
+# 若方言里缺少下列字段, 按公共方言定义补进 v2 字段表, 保证与真实飞控载荷一致。
+EXTRA_V2_FIELDS = {
+    'SYS_STATUS': [
+        ('onboard_control_sensors_present_extended', 'u32'),
+        ('onboard_control_sensors_enabled_extended', 'u32'),
+        ('onboard_control_sensors_health_extended', 'u32'),
+    ],
+}
 
 
 def find_msg(dialects, name):
@@ -105,12 +122,25 @@ def build_def(name):
         v1_size = cls1.unpacker.size
         v1_fields = list(getattr(cls1, 'ordered_fieldnames', []))
 
+    # 补齐方言版本缺失的 MAVLink2 扩展字段 (仅当 v2 字段表中确实没有时)
+    existing = {f['name'] for f in fields}
+    base_size = int(cls.unpacker.size)
+    type_size = {'b': 1, 'B': 1, 'h': 2, 'H': 2, 'i': 4, 'I': 4, 'f': 4, 'd': 8,
+                 'q': 8, 'Q': 8, '?': 1,
+                 'i8': 1, 'u8': 1, 'i16': 2, 'u16': 2, 'i32': 4, 'u32': 4,
+                 'f32': 4, 'f64': 8, 'i64': 8, 'u64': 8, 'bool': 1}
+    for fname, code in EXTRA_V2_FIELDS.get(name, []):
+        if fname not in existing:
+            fields.append({'name': fname, 'type': code, 'len': 0})
+            existing.add(fname)
+            base_size += type_size[code]
+
     return {
         'id': int(cls.id),
         'name': cls.msgname if hasattr(cls, 'msgname') else name,
         'crcExtra': int(cls.crc_extra),
         'format': fmt,
-        'size': int(cls.unpacker.size),
+        'size': base_size,
         'v1Size': v1_size,
         'v1Fields': v1_fields,
         'fields': fields,
@@ -171,7 +201,7 @@ def main():
     lines.append('};')
     lines.append('')
 
-    with open(OUT, 'w', encoding='utf-8') as fh:
+    with open(OUT, 'w', encoding='utf-8', newline='\n') as fh:
         fh.write('\n'.join(lines))
     print('已写出 %s (%d 条消息)' % (os.path.normpath(OUT), len(order)))
     for name in order:

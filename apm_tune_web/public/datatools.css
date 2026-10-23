@@ -288,7 +288,7 @@
 
 .ai-status.configured {
   color: var(--success);
-  border-color: rgba(63, 185, 80, 0.45);
+  border-color: rgba(34, 197, 94, 0.45);
 }
 
 .ai-modal-box {

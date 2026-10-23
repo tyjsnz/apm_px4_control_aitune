@@ -12,9 +12,9 @@ const html = fs.readFileSync(path.join(PUB, 'index.html'), 'utf8');
 const htmlIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
 
 // 动态创建的 id (由 JS 运行时生成)
-const DYNAMIC = new Set(['otAccelModal', 'otAccelText', 'otAccelConfirm', 'otAccelAbort', 'otSpinCk', 'otSpinGo', 'otSpinCancel', 'group-full', 'fullHeader']);
+const DYNAMIC = new Set(['otAccelModal', 'otAccelText', 'otAccelConfirm', 'otAccelAbort', 'otAccelCanvas', 'otSpinCk', 'otSpinGo', 'otSpinCancel', 'mtCopy', 'group-full', 'fullHeader']);
 
-const files = ['app.js', 'onetouch.js', 'datatools.js', 'charts.js', 'fault.js', 'aiconfig.js'];
+const files = ['app.js', 'monitor.js', 'sensors.js', 'onetouch.js', 'motortest.js', 'datatools.js', 'charts.js', 'fault.js', 'aiconfig.js', 'theme.js', 'takeoffcheck.js'];
 const errs = [];
 let checked = 0;
 

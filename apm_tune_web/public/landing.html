@@ -6,7 +6,14 @@
   <title>扶摇 FuyaoTune · FPV 飞控调参与整机仿真工作站</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta name="description" content="扶摇 FuyaoTune — 开源免费的 FPV 工作站:浏览器 Web Serial 直连 ArduPilot/PX4 一键调参,全栈物理仿真台从装配参数一键推演到稳定高效飞行,导引算法实验室交互式复现比例导引/纯跟踪。免安装、开源 MIT、数据不出本机。" />
+  <meta name="theme-color" content="#0b0f17" />
   <link rel="stylesheet" href="/landing.css" />
+  <!-- 主题防闪: 尽早按上次选择设置 data-theme (默认夜间) -->
+  <script>
+    try {
+      document.documentElement.setAttribute('data-theme', localStorage.getItem('fy_theme') === 'light' ? 'light' : 'dark');
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
 </head>
 <body>
 
@@ -16,6 +23,7 @@
       <div class="hero-brand">
         <img class="hero-logo" src="/favicon.svg" alt="" />
         <span class="hero-name">扶摇 <em>FuyaoTune</em></span>
+        <button id="landingThemeToggle" class="theme-btn" title="切换白天/夜间主题">☀️ 白天</button>
       </div>
       <h1>浏览器里的 <span class="grad">FPV 飞控调参</span> 与 <span class="grad">整机仿真</span> 工作站</h1>
       <p class="hero-sub">
@@ -147,5 +155,6 @@
     <p class="foot-sub">鹏之徙于南冥也,水击三千里,抟扶摇而上者九万里。</p>
   </footer>
 
+  <script src="/theme.js"></script>
 </body>
 </html>

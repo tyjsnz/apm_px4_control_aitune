@@ -10,7 +10,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const GOLD = path.join(__dirname, 'golden');
 
-const gen = spawnSync('python3', [path.join(__dirname, 'make_sample_bin.py')], { cwd: ROOT, encoding: 'utf8' });
+// Windows 上往往只有 python(无 python3), 两者都试一次
+function findPython() {
+  const candidates = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+  for (const exe of candidates) {
+    const r = spawnSync(exe, ['--version'], { encoding: 'utf8' });
+    if (r.status === 0) return exe;
+  }
+  return candidates[0];
+}
+
+const gen = spawnSync(findPython(), [path.join(__dirname, 'make_sample_bin.py')], { cwd: ROOT, encoding: 'utf8' });
 if (gen.status !== 0) {
   console.error('生成样例失败:\n' + gen.stderr);
   process.exit(1);

@@ -2,7 +2,7 @@
 //   Part 1: lib/fcops.js <- pty 模拟飞控   (等价浏览器端 Web Serial 链路的全部飞控操作)
 //   Part 2: server.js HTTP API + WS        (备份/日志存储、日志解析、迁移消息提示)
 //   node test/e2e.test.js
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
@@ -109,11 +109,19 @@ async function part1FcOps() {
   fs.rmSync(STORE_DIR, { recursive: true, force: true });
   fs.mkdirSync(STORE_DIR, { recursive: true });
 
-  // 1. 模拟飞控
-  const fc = spawn('python3', [path.join(__dirname, 'fake_fc.py')], { cwd: ROOT });
-  fc.stderr.on('data', (d) => process.env.E2E_VERBOSE && process.stderr.write('[fc] ' + d));
+  // 1. 模拟飞控 (Windows 上可能只有 python, 没有 python3 别名)
+  const pyExes = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+  const PY = pyExes.find((e) => {
+    try { return spawnSync(e, ['--version'], { stdio: 'ignore' }).status === 0; } catch (err) { return false; }
+  }) || pyExes[0];
+  const fc = spawn(PY, [path.join(__dirname, 'fake_fc.py')], { cwd: ROOT });
+  let fcErr = '';
+  fc.stderr.on('data', (d) => { fcErr += d.toString(); if (process.env.E2E_VERBOSE) process.stderr.write('[fc] ' + d); });
+  fc.on('exit', (code) => { if (code !== 0 && code !== null) console.error('[fc] 退出 code=' + code + '\n' + fcErr); });
   const fcLines = lineReader(fc);
-  const ptyPath = await fcLines.wait('PTY');
+  const ptyPath = await fcLines.wait('PTY').catch((e) => {
+    throw new Error(e.message + (fcErr ? '; 模拟飞控输出: ' + fcErr.trim() : ''));
+  });
   await fcLines.wait('READY');
   console.log('模拟飞控 PTY:', ptyPath);
 

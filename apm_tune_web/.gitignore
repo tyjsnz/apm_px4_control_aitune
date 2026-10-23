@@ -15,5 +15,8 @@ stats/
 # --- 测试生成物 ---
 test/out/
 
+# --- 参数元数据下载缓存 (gen_param_meta.py 重新生成即可) ---
+scripts/parammeta_src/
+
 # --- OS ---
 .DS_Store

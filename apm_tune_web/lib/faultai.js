@@ -30,7 +30,8 @@ export const FAULT_SYSTEM_PROMPT = `你是资深 ArduPilot(APM) / PX4 多旋翼�
 - 参数名用反引号包裹，例如 \`MOT_THST_EXPO\`。
 - 不涉及飞控主题时，简要说明并仍给出通用的记录/排查建议。`;
 
-export function buildFaultUserPrompt(rec = {}) {
+// hints 可选: 内置警告速查库命中的条目 [{en, zh, cause, fix}], 由前端搜索后随请求携带
+export function buildFaultUserPrompt(rec = {}, hints = []) {
   const tags = Array.isArray(rec.tags) ? rec.tags.join(', ') : (rec.tags || '');
   const lines = ['# 飞控故障记录'];
   const add = (k, v) => { if (v !== undefined && v !== null && String(v).trim()) lines.push(`${k}: ${v}`); };
@@ -49,6 +50,20 @@ export function buildFaultUserPrompt(rec = {}) {
   block('上下文 / 日志 / 已做操作', rec.context);
   block('已怀疑原因', rec.cause);
   block('已尝试的修复及结果', rec.fix);
+
+  if (Array.isArray(hints) && hints.length) {
+    lines.push('\n## 内置警告库参考资料');
+    lines.push('(来自随固件版本整理的 ArduPilot 警告/PreArm 对照表, 仅供比对, 以实际记录为准)');
+    for (const h of hints) {
+      const head = [h && h.en, h && h.zh].filter((x) => x && String(x).trim()).join(' / ');
+      if (!head) continue;
+      lines.push(`- ${head}`);
+      const cause = h && String(h.cause || '').trim();
+      const fix = h && String(h.fix || '').trim();
+      if (cause) lines.push(`  原因: ${cause}`);
+      if (fix) lines.push(`  处理: ${fix}`);
+    }
+  }
 
   lines.push('\n请基于以上信息给出故障分析报告。');
   return lines.join('\n');

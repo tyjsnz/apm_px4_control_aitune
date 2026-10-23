@@ -93,7 +93,7 @@ def main():
         recs.append({'name': m.get_type(), 'fields': d})
 
     exp_path = os.path.join(GOLD, 'sample_expected.json')
-    with open(exp_path, 'w', encoding='utf-8') as f:
+    with open(exp_path, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(recs, f, ensure_ascii=False, indent=1)
 
     print('已写出 %s (%d 字节) 与 %s (%d 条记录)'

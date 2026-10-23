@@ -1,7 +1,27 @@
 // 轻量 SVG 折线图渲染(无第三方依赖, 离线可用, 便于导出)
 (function () {
-  const PALETTE = ['#58a6ff', '#f0883e', '#3fb950', '#f85149', '#d29922',
+  const FALLBACK_PALETTE = ['#58a6ff', '#f0883e', '#3fb950', '#f85149', '#d29922',
     '#a371f7', '#39c5cf', '#ff7b72', '#7ee787', '#ffa657'];
+
+  function cssVar(name, fallback) {
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    } catch (e) { return fallback; }
+  }
+
+  // 随主题变化: 读 --chart-N (8 色) + --accent/--info 补足 10 槽
+  function palette() {
+    const p = [];
+    for (let i = 1; i <= 8; i++) p.push(cssVar('--chart-' + i, FALLBACK_PALETTE[i - 1]));
+    p.push(cssVar('--accent', FALLBACK_PALETTE[8]));
+    p.push(cssVar('--info', FALLBACK_PALETTE[9]));
+    return p;
+  }
+
+  const gridColor = () => cssVar('--border', '#30363d');
+  const axisTextColor = () => cssVar('--text-tertiary', '#8b949e');
+  const axisColor = () => cssVar('--text-muted', '#6e7681');
 
   const W = 860;
   const H = 240;
@@ -63,14 +83,15 @@
     const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', class: 'chart-svg' });
 
     // 网格 + y 轴刻度
+    const PALETTE = palette();
     for (let i = 0; i <= 4; i++) {
       const yy = PAD.t + (plotH * i) / 4;
       svg.appendChild(svgEl('line', {
         x1: PAD.l, y1: yy, x2: W - PAD.r, y2: yy,
-        stroke: '#30363d', 'stroke-width': 0.6,
+        stroke: gridColor(), 'stroke-width': 0.6,
       }));
       const val = ymax - ((ymax - ymin) * i) / 4;
-      const txt = svgEl('text', { x: PAD.l - 6, y: yy + 3, 'text-anchor': 'end', fill: '#8b949e', 'font-size': 10 });
+      const txt = svgEl('text', { x: PAD.l - 6, y: yy + 3, 'text-anchor': 'end', fill: axisTextColor(), 'font-size': 10 });
       txt.textContent = num(val);
       svg.appendChild(txt);
     }
@@ -78,16 +99,16 @@
     for (let i = 0; i <= 4; i++) {
       const xx = PAD.l + (plotW * i) / 4;
       svg.appendChild(svgEl('line', {
-        x1: xx, y1: PAD.t, x2: xx, y2: PAD.t + plotH, stroke: '#30363d', 'stroke-width': 0.4,
+        x1: xx, y1: PAD.t, x2: xx, y2: PAD.t + plotH, stroke: gridColor(), 'stroke-width': 0.4,
       }));
       const tv = xmin + ((xmax - xmin) * i) / 4;
-      const txt = svgEl('text', { x: xx, y: H - 8, 'text-anchor': 'middle', fill: '#8b949e', 'font-size': 10 });
+      const txt = svgEl('text', { x: xx, y: H - 8, 'text-anchor': 'middle', fill: axisTextColor(), 'font-size': 10 });
       txt.textContent = num(tv) + 's';
       svg.appendChild(txt);
     }
     // 轴
-    svg.appendChild(svgEl('line', { x1: PAD.l, y1: PAD.t, x2: PAD.l, y2: PAD.t + plotH, stroke: '#6e7681', 'stroke-width': 0.8 }));
-    svg.appendChild(svgEl('line', { x1: PAD.l, y1: PAD.t + plotH, x2: W - PAD.r, y2: PAD.t + plotH, stroke: '#6e7681', 'stroke-width': 0.8 }));
+    svg.appendChild(svgEl('line', { x1: PAD.l, y1: PAD.t, x2: PAD.l, y2: PAD.t + plotH, stroke: axisColor(), 'stroke-width': 0.8 }));
+    svg.appendChild(svgEl('line', { x1: PAD.l, y1: PAD.t + plotH, x2: W - PAD.r, y2: PAD.t + plotH, stroke: axisColor(), 'stroke-width': 0.8 }));
 
     const usedUnits = new Set();
     series.forEach((s, idx) => {
@@ -123,14 +144,21 @@
     return card;
   }
 
+  let last = null;
   function render(container, groups) {
     if (!container) return;
+    last = { container, groups };
     container.innerHTML = '';
     if (!groups || !groups.length) {
       container.innerHTML = '<div class="chart-empty">该日志未包含可绘制的传感器数据</div>';
       return;
     }
     for (const g of groups) container.appendChild(makeChart(g));
+  }
+
+  // 主题切换后按当前数据重绘 (SVG 静态, 不会像 canvas 那样自动刷新)
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('fy:theme', () => { if (last) render(last.container, last.groups); });
   }
 
   window.Charts = { render };

@@ -77,13 +77,13 @@
 }
 
 .ot-status.ok {
-  background: rgba(63, 185, 80, 0.15);
+  background: rgba(34, 197, 94, 0.15);
   color: var(--success);
   border: 1px solid var(--success);
 }
 
 .ot-status.bad {
-  background: rgba(248, 81, 73, 0.15);
+  background: rgba(239, 68, 68, 0.15);
   color: var(--danger);
   border: 1px solid var(--danger);
 }
@@ -134,9 +134,9 @@
 .ot-col-unit { width: 62px; color: var(--text-muted); }
 .ot-col-basis { color: var(--text-secondary); }
 
-.ot-row-same { background: rgba(63, 185, 80, 0.10); }
-.ot-row-diff { background: rgba(210, 153, 34, 0.12); }
-.ot-row-missing { background: rgba(248, 81, 73, 0.08); }
+.ot-row-same { background: rgba(34, 197, 94, 0.10); }
+.ot-row-diff { background: rgba(245, 158, 11, 0.12); }
+.ot-row-missing { background: rgba(239, 68, 68, 0.08); }
 
 .ot-report {
   margin: 0;
@@ -155,7 +155,7 @@
 .ot-modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -187,6 +187,34 @@
 .ot-modal-hint {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.ot-accel-diagram {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.ot-accel-diagram canvas { display: block; }
+
+.ot-frame-info {
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  align-self: center;
+}
+.ot-frame-info.warn {
+  border-color: var(--danger);
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .ot-danger {
@@ -232,7 +260,7 @@
 
 /* 进行中状态: 状态条闪烁 + 禁用按钮视觉提示 */
 .ot-status.busy {
-  background: rgba(210, 153, 34, 0.15);
+  background: rgba(245, 158, 11, 0.15);
   color: var(--warning);
   border: 1px solid var(--warning);
   animation: ot-busy-pulse 1s ease-in-out infinite;
@@ -326,7 +354,7 @@
 }
 
 .ot-help-toc-item.active {
-  background: rgba(88, 166, 255, 0.15);
+  background: rgba(59, 130, 246, 0.15);
   color: var(--accent);
 }
 
@@ -364,7 +392,7 @@
 }
 
 .ot-help-sec mark {
-  background: rgba(210, 153, 34, 0.35);
+  background: rgba(245, 158, 11, 0.35);
   color: var(--text-primary);
   border-radius: 2px;
 }

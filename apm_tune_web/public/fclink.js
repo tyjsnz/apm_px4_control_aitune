@@ -14,8 +14,12 @@
     'request_params', 'set_param', 'reboot', 'send_heartbeat',
     'ot_read', 'ot_write', 'ot_cal', 'ot_accel_cal_start',
     'ot_accel_cal_confirm', 'ot_accel_cal_abort', 'ot_spin_start',
+    'ot_motor_test', 'ot_motor_stop',
+    'prearm_check',
     'backup_restore', 'param_backup', 'param_restore',
     'log_list', 'log_download', 'log_erase',
+    'mav_recent',
+    'sensor_check_start', 'sensor_check_stop',
   ]);
 
   function describePort(port) {

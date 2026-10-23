@@ -1,4 +1,4 @@
-// 一键首飞前端: 方案生成 / 体检读取 / 一键写入 / 校准 / 拆桨实测 / 帮助
+// 一键首飞前端: 方案生成 / 体检读取 / 一键写入 / 校准 / 帮助
 // 方案派生逻辑移植自 docs/ai_pid_tune.py::_ot_stages (由 test/golden 比对保证一致)
 (function () {
   const AP_D = window.OT_DATA || {};
@@ -466,8 +466,9 @@
     accelActive: false,
     accelPos: 0,
     calActive: null,    // 'gyro' | 'baro' | 'level'
-    spinActive: false,
     nextPurpose: null,
+    frameInfo: null,        // { read, className, isQuad, typeName, ... } 机架读取结果
+    frameParamCount: 0,     // doRead 追加的机架参数个数
   };
 
   const CAL_INFO = {
@@ -476,21 +477,19 @@
     level: { btn: 'otCalLevel', label: '水平校准' },
   };
   const ACCEL_BTN = 'otCalAccel';
-  const SPIN_BTN = 'otSpin';
 
   let calTimer = null;
   let accelStartTimer = null;
-  let spinTimer = null;
 
-  /** 是否有独占链路的操作正在进行(体检/写入/校准/六面/拆桨) */
+  /** 是否有独占链路的操作正在进行(体检/写入/校准/六面/电机实测) */
   function busyOp() {
     return !!(state.reading || state.writing || state.calActive
-      || state.spinActive || state.accelActive);
+      || state.accelActive || window.__motorTestRunning);
   }
 
   function busyText() {
     if (state.calActive) return `${CAL_INFO[state.calActive].label}中...`;
-    if (state.spinActive) return '拆桨实测中...';
+    if (window.__motorTestRunning) return '拆桨实测中...';
     if (state.accelActive) return '六面校准中...';
     if (state.reading) return '体检读取中...';
     if (state.writing) return '写入中...';
@@ -513,21 +512,18 @@
   function clearAllTimers() {
     clearTimeout(calTimer);
     clearTimeout(accelStartTimer);
-    clearTimeout(spinTimer);
   }
 
   /** 复位所有"进行中"状态(断连或异常时调用) */
   function resetBusy() {
     clearAllTimers();
     state.calActive = null;
-    state.spinActive = false;
     state.accelActive = false;
     state.accelPos = 0;
     state.reading = false;
     state.writing = false;
     for (const k of Object.keys(CAL_INFO)) setBtnBusy(CAL_INFO[k].btn, false);
     setBtnBusy(ACCEL_BTN, false);
-    setBtnBusy(SPIN_BTN, false);
   }
 
   function getCtx() {
@@ -739,13 +735,10 @@
       else $(CAL_INFO[k].btn).title = '';
     }
     $(ACCEL_BTN).disabled = !connected || busy || px4;
-    $(SPIN_BTN).disabled = !connected || busy || px4;
     if (px4) {
       $(ACCEL_BTN).title = 'PX4 六面校准请使用 QGroundControl';
-      $(SPIN_BTN).title = 'PX4 拆桨实测请使用 QGC 电机测试';
     } else {
       $(ACCEL_BTN).title = '';
-      $(SPIN_BTN).title = '';
     }
 
     const label = busyText();
@@ -755,6 +748,89 @@
   }
 
   // ---------- 体检 ----------
+  // 机架参数 (随体检一并读取, 只展示+警告, 不进方案表)
+  const FRAME_CLASS_NAMES = {
+    0: '未定义', 1: '四旋翼', 2: '六旋翼', 3: '八旋翼', 4: '八旋翼四轴', 5: 'Y6',
+    6: '直升机', 7: '三旋翼', 8: '单旋翼', 9: '共轴双旋翼', 10: '双旋翼',
+    11: '双直升机', 12: '十二旋翼', 13: '四直升机', 14: '十旋翼',
+    15: '脚本矩阵', 16: '6DoF脚本', 17: '动态脚本矩阵',
+  };
+  const FRAME_TYPE_NAMES = {
+    0: 'Plus(+)', 1: 'X', 2: 'V', 3: 'H', 4: 'V-Tail', 5: 'A-Tail',
+    10: 'Y6B', 11: 'Y6F', 12: 'BetaFlightX', 13: 'DJIX', 14: 'ClockwiseX',
+    15: 'I', 18: 'BetaFlightX反', 19: 'Y4',
+  };
+  const PX4_AIRFRAME_NAMES = {
+    0: '多旋翼', 1: '固定翼', 2: '标准VTOL', 3: '倾转VTOL', 4: '尾座VTOL',
+    5: '车', 6: '车', 7: '6DOF电机', 8: '倾转多旋翼', 9: '自定义',
+    10: '直升机', 11: '直升机', 12: '直升机', 13: '麦克纳姆', 14: '航天器', 15: '航天器',
+  };
+
+  function renderFrameInfo() {
+    const el = $('otFrameInfo');
+    if (!el) return;
+    const fi = state.frameInfo;
+    if (!fi || !fi.read) {
+      el.textContent = '机架: 未读取';
+      el.className = 'ot-frame-info';
+      return;
+    }
+    if (isPx4()) {
+      el.textContent = '机型号: ' + fi.name;
+      el.className = 'ot-frame-info' + (fi.ok ? '' : ' warn');
+    } else {
+      el.textContent = '机架: ' + fi.className + (fi.typeName ? ' ' + fi.typeName + '型' : '');
+      el.className = 'ot-frame-info' + (fi.isQuad ? '' : ' warn');
+    }
+  }
+
+  /** 解析 doRead 尾部追加的机架参数结果 (results 的最后 1~2 项) */
+  function parseFrameResults(frameResults) {
+    const info = { read: false };
+    const valOf = (r) => (r && r.value !== null && r.value !== undefined && !Number.isNaN(Number(r.value)))
+      ? Number(r.value) : null;
+    if (isPx4()) {
+      const v = valOf(frameResults[0]);
+      if (v !== null) {
+        info.read = true;
+        info.name = PX4_AIRFRAME_NAMES[v] || `CA_AIRFRAME=${v}`;
+        info.ok = (v === 0);
+      }
+    } else {
+      const vc = valOf(frameResults[0]);
+      if (vc !== null) {
+        info.read = true;
+        info.className = FRAME_CLASS_NAMES[vc] || `FRAME_CLASS=${vc}`;
+        info.isQuad = (vc === 1);
+        const vt = valOf(frameResults[1]);
+        if (vt !== null) {
+          info.typeName = FRAME_TYPE_NAMES[vt] || `FRAME_TYPE=${vt}`;
+          info.typeStandard = (vt === 0 || vt === 1);
+        }
+      }
+    }
+    state.frameInfo = info;
+    renderFrameInfo();
+    return info;
+  }
+
+  /** 机架警告行 (返回要追加进报告的字符串数组) */
+  function frameWarnLines() {
+    const fi = state.frameInfo;
+    if (!fi || !fi.read) return [];
+    if (isPx4()) {
+      return fi.ok ? []
+        : [`  ⚠ 机型号为 ${fi.name} (非多旋翼)，本工具方案按多旋翼参数体系派生，可能不适用，请人工复核`];
+    }
+    const out = [];
+    if (!fi.isQuad) {
+      out.push(`  ⚠ 当前机架为 ${fi.className}，本工具方案按四旋翼多旋翼派生，电机混控/部分参数可能不适用，请人工复核`);
+    } else if (fi.typeName && !fi.typeStandard) {
+      out.push(`  ℹ 混控布局为 ${fi.typeName} (非 +/X 标准)，ATC/MOT 参数通用，请核对电机序号与转向`);
+    }
+    return out;
+  }
+
   function doRead() {
     if (!state.connected) { alert('请先连接飞控'); return; }
     if (busyOp()) { alert('已有操作正在进行，请等待完成后再试'); return; }
@@ -766,14 +842,17 @@
       name: row.entry.name,
       aliases: row.entry.aliases || [],
     }));
-    report(`体检读取 ${params.length} 项...`, true);
+    const frameParams = isPx4()
+      ? [{ name: 'CA_AIRFRAME', aliases: [] }]
+      : [{ name: 'FRAME_CLASS', aliases: [] }, { name: 'FRAME_TYPE', aliases: [] }];
+    state.frameParamCount = frameParams.length;
+    params.push(...frameParams);
+    report(`体检读取 ${state.rows.length} 项 (+机架 ${frameParams.length} 项)...`, true);
     wsSend({ type: 'ot_read', params });
   }
 
   function onReadResult(msg) {
     state.reading = false;
-    const byIdx = {};
-    msg.results.forEach((res, i) => { byIdx[i] = res; });
     let same = 0; let diff = 0; let miss = 0;
     state.rows.forEach((row, i) => {
       const res = msg.results[i];
@@ -786,6 +865,11 @@
       else diff++;
       updateRowDelta(row);
     });
+    // 尾部追加项 = 机架参数
+    const fc = state.frameParamCount || 0;
+    if (fc && msg.results.length > state.rows.length) {
+      parseFrameResults(msg.results.slice(msg.results.length - fc));
+    }
     const lines = [`体检完成: 已读取 ${state.rows.length - miss}/${state.rows.length}，已一致 ${same}，需改 ${diff}，读不到 ${miss}。`];
     if (msg.volt) {
       const cells = msg.cells;
@@ -796,7 +880,8 @@
     if (miss) lines.push(isPx4()
       ? '  ⚠ 读不到的项可能是该固件版本不存在/已更名的参数, 写入时会自动跳过失败项'
       : '  ⚠ 读不到的项多为 4.7 改名或该机未启用，已自动尝试新旧两套参数名');
-    lines.push('  下一步: 拆桨实测起转 → ③ 一键写入 → 重启飞控 → 装桨试飞');
+    lines.push(...frameWarnLines());
+    lines.push('  下一步: ③ 一键写入 → (拆桨用「电机测试」页实测定 SPIN_ARM) → 重启飞控 → 装桨试飞');
     report(lines.join('\n'), true);
     updateButtons();
   }
@@ -920,8 +1005,6 @@
       case 'ot_cal_done': finishCal(msg.kind, !!msg.ok, msg.text); break;
       case 'ot_accel_cal_prompt': onAccelPrompt(msg); break;
       case 'ot_accel_cal_done': onAccelDone(msg); break;
-      case 'ot_spin_progress': report(`  电机${msg.motor} @ ${msg.pct}%: RPM=${msg.rpm}`); break;
-      case 'ot_spin_done': onSpinDone(msg); break;
       case 'error':
         // 启动六面校准被拒/失败时复位, 避免按钮卡在"进行中"
         if (state.accelActive && /六面|加速度计/.test(msg.message || '')) {
@@ -990,6 +1073,160 @@
       wsSend({ type: 'ot_accel_cal_confirm', pos: msg.pos });
       setTimeout(() => { btn.textContent = '该面已摆好(发送确认)'; }, 3000);
     };
+    drawAccelDiagram(msg.pos >= 1 ? msg.pos : 0);
+  }
+
+  const ACCEL_POS_NAMES = {
+    1: 'LEVEL 水平', 2: 'LEFT 左侧', 3: 'RIGHT 右侧',
+    4: 'NOSEDOWN 机头朝下', 5: 'NOSEUP 机头朝上', 6: 'BACK 背面朝上',
+  };
+
+  /**
+   * 六面校准位置示意图 — 俯视机头朝上为基准图标, 按要求摆放的面旋转,
+   * 地面线固定在画布底部, 并始终显示当前面名称。
+   * pos: 0=未开始/启动中 1=水平 2=左翻 3=右翻 4=机头朝下 5=机头朝上 6=背面朝上
+   */
+  // 加速计示意图取色随主题 (canvas 底色为 --bg-primary, 文字须同步)
+  let themeVars = {};
+  function cvar(name, fb) {
+    if (name in themeVars) return themeVars[name];
+    let v = fb;
+    try { v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fb; } catch (e) { /* 读取失败走兜底 */ }
+    themeVars[name] = v;
+    return v;
+  }
+  const DIAG_CHART_N = { '#3B82F6': 1, '#22C55E': 2, '#EF4444': 3, '#F59E0B': 4 };
+  function diagColor(hex) {
+    const n = DIAG_CHART_N[hex];
+    return n ? cvar('--chart-' + n, hex) : hex;
+  }
+
+  function drawAccelDiagram(pos) {
+    const cv = document.getElementById('otAccelCanvas');
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+
+    // 地面线 (固定底部)
+    const groundY = H - 34;
+    ctx.strokeStyle = cvar('--text-secondary', '#555');
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(20, groundY);
+    ctx.lineTo(W - 20, groundY);
+    ctx.stroke();
+    ctx.fillStyle = cvar('--text-secondary', '#666');
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('地面', W - 24, groundY + 15);
+    ctx.textAlign = 'left';
+
+    // 俯视四轴图标 (机头朝上为 0° 基准), 绕中心旋转后落在地面线上
+    function drawTopQuad(rot, opts) {
+      opts = opts || {};
+      ctx.save();
+      ctx.translate(W / 2, groundY - 56);
+      ctx.rotate(rot);
+      if (opts.flipY) ctx.scale(1, -1);   // 背面朝上: 显示底面
+      // 机臂 (X 型对角)
+      ctx.strokeStyle = opts.invert ? cvar('--diagram-neutral', '#94A3B8') : diagColor('#22C55E');
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-34, -34); ctx.lineTo(34, 34);
+      ctx.moveTo(34, -34); ctx.lineTo(-34, 34);
+      ctx.stroke();
+      // 电机
+      const motors = [[-34, -34], [34, -34], [-34, 34], [34, 34]];
+      ctx.fillStyle = opts.invert ? cvar('--diagram-neutral-soft', '#CBD5E1') : diagColor('#3B82F6');
+      motors.forEach(([mx, my]) => {
+        ctx.beginPath();
+        ctx.arc(mx, my, 7, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      // 桨叶椭圆
+      ctx.strokeStyle = cvar('--diagram-prop', '#60A5FA');
+      ctx.lineWidth = 1.5;
+      motors.forEach(([mx, my]) => {
+        ctx.beginPath();
+        ctx.ellipse(mx, my, 15, 5, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+      // 机身
+      ctx.fillStyle = opts.invert ? 'rgba(148,163,184,.25)' : 'rgba(59,130,246,.18)';
+      ctx.strokeStyle = opts.invert ? cvar('--diagram-neutral', '#94A3B8') : diagColor('#3B82F6');
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(-15, -22, 30, 44, 6);
+      ctx.fill();
+      ctx.stroke();
+      // 机头箭头 (始终指机头方向)
+      ctx.fillStyle = opts.invert ? diagColor('#F59E0B') : diagColor('#EF4444');
+      ctx.beginPath();
+      ctx.moveTo(0, -34);
+      ctx.lineTo(-9, -22);
+      ctx.lineTo(9, -22);
+      ctx.closePath();
+      ctx.fill();
+      if (opts.invert) {
+        // 底面标记 ×
+        ctx.strokeStyle = diagColor('#F59E0B');
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-8, -8); ctx.lineTo(8, 8);
+        ctx.moveTo(8, -8); ctx.lineTo(-8, 8);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // 各面旋转与变体 (基准: 俯视机头朝上)
+    if (pos === 1) {
+      // 水平: 0° 平放, 地面顶起落架
+      drawTopQuad(0);
+    } else if (pos === 2) {
+      // 左侧着地: 顺时针 90° (机头朝右, 原左侧转向地面)
+      drawTopQuad(Math.PI / 2);
+    } else if (pos === 3) {
+      // 右侧着地: 逆时针 90° (机头朝左, 原右侧转向地面)
+      drawTopQuad(-Math.PI / 2);
+    } else if (pos === 4) {
+      // 机头朝下: 180°
+      drawTopQuad(Math.PI);
+    } else if (pos === 5) {
+      // 机头朝上(尾部着地): 0° + 立姿标注
+      drawTopQuad(0);
+      ctx.strokeStyle = diagColor('#F59E0B');
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(W / 2 - 40, groundY);
+      ctx.lineTo(W / 2 + 40, groundY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (pos === 6) {
+      // 背面朝上(倒置): 180° + 底面 × 标记
+      drawTopQuad(0, { invert: true, flipY: true });
+    }
+
+    // 底部当前面名称 (大字)
+    ctx.fillStyle = pos >= 1 ? cvar('--text-primary', '#E2E8F0') : cvar('--text-muted', '#888');
+    ctx.font = pos >= 1 ? 'bold 14px sans-serif' : '12px sans-serif';
+    ctx.textAlign = 'center';
+    const label = pos >= 1 ? (ACCEL_POS_NAMES[pos] || `pos${pos}`) : '等待摆放...';
+    ctx.fillText(label, W / 2, H - 8);
+    ctx.textAlign = 'left';
+  }
+
+  // 主题切换: 清缓存, 加速计模态开着时按新主题重画
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('fy:theme', () => {
+      themeVars = {};
+      try {
+        const modal = document.getElementById('otAccelModal');
+        if (modal && modal.style.display !== 'none') drawAccelDiagram(state.accelPos || 0);
+      } catch (e) { /* 忽略 */ }
+    });
   }
 
   function createAccelModal() {
@@ -1000,6 +1237,7 @@
       <div class="ot-modal-box">
         <h3>六面加速度计校准</h3>
         <p id="otAccelText">正在启动校准...</p>
+        <div class="ot-accel-diagram"><canvas id="otAccelCanvas" width="300" height="230"></canvas></div>
         <button id="otAccelConfirm" disabled>该面已摆好(发送确认)</button>
         <p class="ot-modal-hint">提示: LEVEL 最重要，务必按真实水平飞行姿态摆好；其余各面 ±20° 可接受，静止最关键。</p>
         <p class="ot-modal-hint">如需中断: 重启飞控</p>
@@ -1010,6 +1248,7 @@
       div.style.display = 'none';
       wsSend({ type: 'ot_accel_cal_abort' });
     };
+    drawAccelDiagram(0);
     return div;
   }
 
@@ -1044,68 +1283,23 @@
     }
   }
 
-  function doSpinTest() {
-    if (!state.connected) { alert('请先连接飞控'); return; }
-    if (busyOp()) { alert('已有操作正在进行，请等待完成后再试'); return; }
-    const modal = document.createElement('div');
-    modal.className = 'ot-modal';
-    modal.innerHTML = `
-      <div class="ot-modal-box">
-        <h3>⚠ 拆桨实测 · 二次确认</h3>
-        <p>本功能会逐档升油门让电机转动，用来测定起转点。</p>
-        <p class="ot-danger">⚠⚠ 必须先拆除所有桨叶！</p>
-        <p>需要 ESC 遥测(DShot + 遥测线/双向 DShot)；没有遥测会中止。<br>
-           飞控需处于落地、未解锁、安全开关未锁状态。</p>
-        <label class="ot-confirm-lab">
-          <input type="checkbox" id="otSpinCk">
-          我已拆下全部桨叶，确认人员与手指远离电机、飞控已固定
-        </label>
-        <div class="ot-modal-actions">
-          <button id="otSpinGo" disabled>✓ 已拆桨，开始实测</button>
-          <button id="otSpinCancel">取消</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    modal.querySelector('#otSpinCk').addEventListener('change', (e) => {
-      modal.querySelector('#otSpinGo').disabled = !e.target.checked;
-    });
-    modal.querySelector('#otSpinCancel').onclick = () => modal.remove();
-    modal.querySelector('#otSpinGo').onclick = () => {
-      modal.remove();
-      state.spinActive = true;
-      setBtnBusy(SPIN_BTN, true, '⏳ 拆桨实测中...');
-      updateButtons();
-      report('拆桨实测: 从 6% 逐档升油门寻找起转点...(进行中请勿重复点击其它操作)', true);
-      wsSend({ type: 'ot_spin_start' });
-      clearTimeout(spinTimer);
-      // 兜底: 长时间未回执则复位(正常应由 ot_spin_done 结束)
-      spinTimer = setTimeout(() => {
-        if (state.spinActive) {
-          state.spinActive = false;
-          setBtnBusy(SPIN_BTN, false);
-          updateButtons();
-          report('⚠ 拆桨实测等待超时(未收到完成回执)，已复位按钮。请检查链路。', true);
-        }
-      }, 180000);
-    };
-  }
-
-  function onSpinDone(msg) {
-    clearTimeout(spinTimer);
-    state.spinActive = false;
-    setBtnBusy(SPIN_BTN, false);
-    updateButtons();
-    if (msg.ok) {
-      // 自动填入方案表
-      for (const row of state.rows) {
-        if (row.entry.name === 'MOT_SPIN_ARM') { row.value = msg.arm; refreshRowValue(row); }
-        else if (row.entry.name === 'MOT_SPIN_MIN') { row.value = msg.min; refreshRowValue(row); }
-      }
-      report(`✅ 起转点实测 ≈ ${msg.spin}% → 建议 MOT_SPIN_ARM=${msg.arm}、MOT_SPIN_MIN=${msg.min}\n`
-        + '  已自动填入方案表；确认无误后点「③ 一键写入」。', true);
-    } else {
-      report('❌ ' + (msg.text || '拆桨实测失败'), true);
+  /**
+   * 电机测试页回填起转点结果 (MotorTest 在 ot_spin_done 成功后调用)。
+   * 填入方案表 MOT_SPIN_ARM / MOT_SPIN_MIN 行并刷新显示。
+   * @returns {boolean} 是否找到了可回填的行 (方案表未生成时为 false)
+   */
+  function applySpinResult(msg) {
+    if (!msg || !msg.ok) return false;
+    let filled = false;
+    for (const row of state.rows) {
+      if (row.entry.name === 'MOT_SPIN_ARM') { row.value = msg.arm; refreshRowValue(row); filled = true; }
+      else if (row.entry.name === 'MOT_SPIN_MIN') { row.value = msg.min; refreshRowValue(row); filled = true; }
     }
+    if (filled) {
+      report(`✅ 起转点实测 ≈ ${msg.spin}% → 已填入 MOT_SPIN_ARM=${msg.arm}、MOT_SPIN_MIN=${msg.min}\n`
+        + '  确认无误后点「③ 一键写入」。', true);
+    }
+    return filled;
   }
 
   function refreshRowValue(row) {
@@ -1280,7 +1474,6 @@
         }
       }, 8000);
     };
-    $('otSpin').onclick = doSpinTest;
     $('otPurpose').addEventListener('change', () => {
       const ctx = getCtx();
       if (isPx4()) {
@@ -1315,10 +1508,18 @@
 
   function setConnected(v) {
     state.connected = !!v;
-    if (!state.connected) resetBusy();  // 断连时复位所有"进行中"状态
+    if (!state.connected) {
+      resetBusy();  // 断连时复位所有"进行中"状态
+      state.frameInfo = null;
+      state.frameParamCount = 0;
+      renderFrameInfo();
+    }
     updateButtons();
   }
 
-  window.OneTouch = { init, handleMessage, setConnected, onFirmwareChange };
+  /** 忙碌状态查询 (电机测试页启动前调用, 避免与读取/写入/校准抢占链路) */
+  function isBusy() { return busyOp(); }
+
+  window.OneTouch = { init, handleMessage, setConnected, onFirmwareChange, applySpinResult, isBusy };
   if (typeof document !== 'undefined') window.OneTouch.init();
 })();

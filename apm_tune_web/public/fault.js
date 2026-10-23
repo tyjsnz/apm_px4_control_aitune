@@ -1,5 +1,6 @@
 // 飞控故障速查 (前端)
-// 记录故障/修复, 服务器 faults/ 永久存储; 可调用 AI 协助分析
+// 内置警告速查 (faultdb.js: docs CSV + ardupilot.org 对照, 中英文搜索/分类/记为故障)
+// + 故障记录/修复, 服务器 faults/ 永久存储; 可调用 AI 协助分析 (匹配条目随附为参考)
 // AI 配置为全局共享 (见 aiconfig.js)
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -10,7 +11,10 @@
     dirty: false,
     analyzing: false,
     loaded: false,
+    refOpen: new Set(),   // 速查中手动展开的条目 id
   };
+
+  const REF_RENDER_CAP = 150;
 
   const SEV_LABEL = { info: '提示', low: '轻微', mid: '中等', high: '严重' };
   const STATUS_LABEL = { open: '未解决', monitor: '观察中', fixed: '已解决' };
@@ -32,10 +36,158 @@
   };
 
   function setStatus(text, cls) {
-    const el = $('ftStatus');
+    const el = $('ftStatusBadge');
     if (!el) return;
     el.textContent = text;
     el.className = 'dt-status' + (cls ? ' ' + cls : '');
+  }
+
+  // ---------- 警告速查 (faultdb.js 内置知识库) ----------
+  function refNote(text) {
+    const el = $('frNote');
+    if (!el) return;
+    el.textContent = text || '';
+    if (text) {
+      clearTimeout(refNote._t);
+      refNote._t = setTimeout(() => { el.textContent = ''; }, 3000);
+    }
+  }
+
+  function switchTab(which) {
+    const ref = which === 'ref';
+    $('ftTabRef').classList.toggle('active', ref);
+    $('ftTabRec').classList.toggle('active', !ref);
+    $('ftPaneRef').classList.toggle('hidden', !ref);
+    $('ftPaneRec').classList.toggle('hidden', ref);
+  }
+
+  function refById(id) {
+    if (typeof FaultDB === 'undefined') return null;
+    return FaultDB.byId(id);
+  }
+
+  function refItemHtml(e, open) {
+    const tag = e.cat === '通用警告' ? 'g' : (e.cat === '仅多轴或直升机的警告' ? 'm' : 'p');
+    const short = (typeof FaultDB !== 'undefined' && FaultDB.CAT_SHORT[e.cat]) || e.cat;
+    return `<div class="fr-item${open ? ' open' : ''}" data-id="${e.id}">
+      <div class="fr-head" title="点击展开 / 收起">
+        <span class="fr-badge fr-badge-${tag}">${esc(short)}</span>
+        <code class="fr-en">${esc(e.en)}</code>
+        <span class="fr-zh">${esc(e.zh)}</span>
+        ${e.src === 'wiki' ? '<span class="fr-wiki" title="补充自 ardupilot.org 官方 Pre-Arm 文档">wiki</span>' : ''}
+        <span class="fr-caret"></span>
+      </div>
+      <div class="fr-body">
+        <div class="fr-line"><b>原因</b><span>${esc(e.cause)}</span></div>
+        <div class="fr-line"><b>处理</b><span>${esc(e.fix)}</span></div>
+        <div class="fr-acts">
+          <button class="fr-use" data-id="${e.id}" title="以此条目新建故障记录草稿">📂 记为故障</button>
+          <button class="fr-copy" data-id="${e.id}">复制条目</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderRefList() {
+    const box = $('frList');
+    if (!box) return;
+    if (typeof FaultDB === 'undefined') {
+      box.innerHTML = '<div class="fr-empty">警告库未加载: 缺少 public/faultdb.js (运行 node scripts/build_faultdb.js 生成)</div>';
+      return;
+    }
+    const q = ($('frSearch').value || '').trim();
+    const cat = $('frCat').value;
+    const list = FaultDB.search(q, cat);
+    const autoOpen = !!q && list.length <= 5;
+    const shown = list.slice(0, REF_RENDER_CAP);
+    $('frMeta').textContent = list.length
+      ? `匹配 ${list.length} / ${FaultDB.count} 条` + (list.length > REF_RENDER_CAP ? ` (仅显示前 ${REF_RENDER_CAP} 条, 请细化搜索)` : '')
+      : (q ? `无匹配 (共 ${FaultDB.count} 条), 试试更短的关键词` : `共 ${FaultDB.count} 条`);
+    box.innerHTML = shown.map((e) => refItemHtml(e, autoOpen || state.refOpen.has(e.id))).join('');
+  }
+
+  function renderRefSrc() {
+    const el = $('frSrc');
+    if (!el) return;
+    if (typeof FaultDB === 'undefined') { el.textContent = '警告库未加载 (faultdb.js 缺失)'; return; }
+    const m = FaultDB.META;
+    const wiki = m.wikiUrl
+      ? `<a href="${esc(m.wikiUrl)}" target="_blank" rel="noopener">ardupilot.org Pre-Arm Safety Checks</a>`
+      : 'ardupilot.org';
+    const c = m.counts || {};
+    el.innerHTML = `数据源: <b>${esc(m.csvFile)}</b> (制表 ${esc(m.csvDate)} · ${esc(m.firmware)}) ${c.csv || 0} 条`
+      + ` + 官方文档补充 ${c.wiki || 0} 条 = 共 <b>${FaultDB.count}</b> 条 · 参考 ${wiki} · 构建 ${esc(m.builtAt)}`;
+  }
+
+  function refToRecord(id) {
+    const e = refById(id);
+    if (!e) return;
+    if (state.dirty && !confirm('当前记录有未保存的修改，新建将丢失。继续？')) return;
+    switchTab('rec');
+    clearForm();
+    $('ftTitle').value = e.zh || '';
+    $('ftSymptom').value = [e.en, e.zh].filter(Boolean).join(' / ');
+    $('ftTags').value = ((typeof FaultDB !== 'undefined' && FaultDB.CAT_SHORT[e.cat]) || '') + ', 速查';
+    $('ftContext').value = `【速查参考·原因】${e.cause}\n【速查参考·处理】${e.fix}`;
+    markDirty(true);
+    setStatus('已从速查生成记录草稿, 确认后点「保存」入库');
+    $('ftTitle').focus();
+  }
+
+  function copyRef(id) {
+    const e = refById(id);
+    if (!e) return;
+    const text = `${e.en}\n${e.zh}\n原因: ${e.cause}\n处理: ${e.fix}`;
+    const ok = () => refNote('✓ 条目已复制');
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(ok, () => refNote('复制失败'));
+    } else refNote('复制失败: 浏览器不支持剪贴板 API');
+  }
+
+  function onRefListClick(ev) {
+    const t = ev.target;
+    if (!t || !t.closest) return;
+    const use = t.closest('.fr-use');
+    if (use) { refToRecord(parseInt(use.dataset.id, 10)); return; }
+    const cp = t.closest('.fr-copy');
+    if (cp) { copyRef(parseInt(cp.dataset.id, 10)); return; }
+    const head = t.closest('.fr-head');
+    if (head && head.parentElement) {
+      const item = head.parentElement;
+      item.classList.toggle('open');
+      const id = parseInt(item.dataset.id, 10);
+      if (item.classList.contains('open')) state.refOpen.add(id);
+      else state.refOpen.delete(id);
+    }
+  }
+
+  // 记录页「速查现象」: 取现象/标题首行到速查中搜索
+  function searchFromRecord() {
+    const src = ($('ftSymptom').value || '').trim() || ($('ftTitle').value || '').trim();
+    const line = src.split(/\r?\n/).map((s) => s.trim()).find(Boolean) || '';
+    switchTab('ref');
+    $('frSearch').value = line.slice(0, 120);
+    renderRefList();
+    $('frSearch').focus();
+  }
+
+  // AI 分析随附的速查参考条目 (最多 5 条)
+  function collectHints(rec) {
+    if (typeof FaultDB === 'undefined') return [];
+    const hints = [];
+    const seen = new Set();
+    for (const q of [rec.title, rec.symptom]) {
+      const text = String(q || '').trim();
+      if (!text) continue;
+      for (const e of FaultDB.search(text, '')) {
+        if (seen.has(e.id)) continue;
+        seen.add(e.id);
+        hints.push({ en: e.en, zh: e.zh, cause: e.cause, fix: e.fix });
+        if (hints.length >= 5) break;
+      }
+      if (hints.length >= 5) break;
+    }
+    return hints;
   }
 
   // ---------- 表单 ----------
@@ -207,8 +359,9 @@
     state.analyzing = true;
     updateButtons();
     setStatus('AI 分析中... (可能需数十秒)');
-    // AI 配置随请求携带 (本机 Key), 服务端仅代理且不保存
-    wsSend({ ...(typeof AIConfig !== 'undefined' ? AIConfig.toRequest() : {}), type: 'fault_analyze', record: rec });
+    // AI 配置随请求携带 (本机 Key), 服务端仅代理且不保存; 匹配的速查条目一并附上作参考
+    wsSend({ ...(typeof AIConfig !== 'undefined' ? AIConfig.toRequest() : {}),
+      type: 'fault_analyze', record: rec, hints: collectHints(rec) });
   }
 
   function onAnalyzeDone(msg) {
@@ -291,6 +444,15 @@
     $('ftAiRun').onclick = runAi;
     $('ftAiSettingsBtn').onclick = () => { if (typeof AIConfig !== 'undefined') AIConfig.openSettings(); };
     if (typeof AIConfig !== 'undefined') AIConfig.subscribe(updateAiStatus);
+    // 警告速查 (默认页签)
+    $('ftTabRef').onclick = () => switchTab('ref');
+    $('ftTabRec').onclick = () => switchTab('rec');
+    $('ftRefBtn').onclick = searchFromRecord;
+    $('frSearch').addEventListener('input', renderRefList);
+    $('frCat').addEventListener('change', renderRefList);
+    $('frList').addEventListener('click', onRefListClick);
+    renderRefSrc();
+    renderRefList();
     // 未保存提醒
     for (const id of ['ftTitle', 'ftAircraft', 'ftFirmware', 'ftTags', 'ftSymptom',
       'ftContext', 'ftCause', 'ftFix', 'ftAiReport']) {

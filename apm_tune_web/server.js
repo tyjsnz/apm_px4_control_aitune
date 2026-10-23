@@ -134,10 +134,43 @@ app.use('/guide', guideNoSlash('/guide'),
 // 产品入口页: 根路径返回 landing.html (两个子系统的统一介绍与跳转页, 资源引用为绝对路径)
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
 
-// 调参工作台: /app 与 / 再挂同一份 public/, 页面内相对资源在 /app/ 下解析后仍能取到
-app.use('/app', express.static(path.join(__dirname, 'public')));
+// 预压缩静态资源: 同目录存在 xxx.gz 且客户端接受 gzip 时直接回 gz (如 public/parammeta/*.json.gz)
+const GZ_TEXT_EXT = /\.(json|js|mjs|css|html|svg|txt|md|map)$/;
+const GZ_MIME = {
+  '.json': 'application/json; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+};
+function precompressed(root) {
+  return (req, res, next) => {
+    if (!/\bgzip\b/i.test(req.headers['accept-encoding'] || '')) return next();
+    let p;
+    try { p = decodeURIComponent(req.path); } catch (e) { return next(); }
+    if (!GZ_TEXT_EXT.test(p)) return next();
+    const full = path.join(root, p);
+    if (!full.startsWith(root)) return next();
+    const gz = full + '.gz';
+    let st;
+    try { st = fs.statSync(gz); } catch (e) { return next(); }
+    if (!st.isFile()) return next();
+    res.setHeader('Content-Type', GZ_MIME[path.extname(full).toLowerCase()] || 'application/octet-stream');
+    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Vary', 'Accept-Encoding');
+    res.setHeader('Content-Length', st.size);
+    fs.createReadStream(gz).pipe(res);
+  };
+}
 
-app.use(express.static(path.join(__dirname, 'public')));
+// 调参工作台: /app 与 / 再挂同一份 public/, 页面内相对资源在 /app/ 下解析后仍能取到
+app.use('/app', precompressed(path.join(__dirname, 'public')), express.static(path.join(__dirname, 'public')));
+
+app.use(precompressed(path.join(__dirname, 'public')), express.static(path.join(__dirname, 'public')));
 // 协议层模块以 ES Module 形式提供给浏览器 (lib/fcops.js + lib/paramlink.js + lib/mavlink.js)
 app.use('/lib', express.static(path.join(__dirname, 'lib')));
 
@@ -248,6 +281,8 @@ const MIGRATED_TYPES = [
   'request_params', 'set_param', 'reboot', 'send_heartbeat',
   'ot_read', 'ot_write', 'ot_cal', 'ot_accel_cal_start',
   'ot_accel_cal_confirm', 'ot_accel_cal_abort', 'ot_spin_start',
+  'ot_motor_test', 'ot_motor_stop',
+  'prearm_check',
   'backup_restore', 'param_backup', 'param_restore',
   'log_list', 'log_download', 'log_erase',
 ];
@@ -415,6 +450,16 @@ async function faultAnalyze(ws, msg) {
     send(ws, { type: 'fault_analyze_done', ok: false, error: '尚未配置可用的 AI: 请在「AI 设置」中填写你自己的 API Key (仅保存在本机浏览器)' });
     return;
   }
+  // 前端速查库命中的参考条目: 数量与字段长度双重钳制
+  const hints = (Array.isArray(msg.hints) ? msg.hints : [])
+    .slice(0, 6)
+    .map((h) => ({
+      en: String((h && h.en) || '').slice(0, 200),
+      zh: String((h && h.zh) || '').slice(0, 200),
+      cause: String((h && h.cause) || '').slice(0, 400),
+      fix: String((h && h.fix) || '').slice(0, 400),
+    }))
+    .filter((h) => h.en || h.zh);
   send(ws, { type: 'fault_analyze_start' });
   const r = await aiChat({
     provider: ai.provider,
@@ -422,7 +467,7 @@ async function faultAnalyze(ws, msg) {
     model: ai.model,
     baseUrl: ai.baseUrl,
     system: FAULT_SYSTEM_PROMPT,
-    user: buildFaultUserPrompt(rec),
+    user: buildFaultUserPrompt(rec, hints),
     timeoutMs: 180000,
   });
   if (r.error) {

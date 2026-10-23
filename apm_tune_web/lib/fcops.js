@@ -74,12 +74,24 @@ export class FcOps {
     };
     this.lastEsc = { rpm: null, t: 0 };
     this.accelCal = null;
+    this.prearmWin = null;          // RUN_PREARM_CHECKS 结果收集窗 {texts, ack}
+    this.singleTestUntil = 0;      // 单电机点动测试防重入 (毫秒时间戳)
     this.opLock = Promise.resolve();
     this.paramCacheAll = {};       // name -> { value, type }
 
     // 突发消息队列 (PARAM_VALUE / LOG_ENTRY / LOG_DATA / STATUSTEXT)
     this.msgQueue = [];
     this.MSG_QUEUE_MAX = 50000;
+
+    // MAVLink 消息速率统计 + 最近解码消息样本 (前端「消息控制台」页)
+    this.mavStats = {
+      period: {},                 // 当前统计窗口内的计数 {MSG_NAME: n}
+      cum: {},                    // 连接以来累计计数
+      windowStart: Date.now(),
+      recent: [],                 // 最近消息样本 {t, name, fields}
+    };
+    this.RECENT_MAX = 300;
+    this.statsTimer = null;
   }
 
   // ==================== 基础 ====================
@@ -101,6 +113,7 @@ export class FcOps {
     this.log(`飞控链路已建立: ${path} @ ${baud}`);
     this.emit({ type: 'connected', path, baud });
     this.startHeartbeat();
+    this.startStats();
     this.link.sendHeartbeat();
     setTimeout(() => { try { this.link.requestParamList(); } catch (e) { /* ignore */ } }, 500);
   }
@@ -108,10 +121,13 @@ export class FcOps {
   /** 串口关闭后调用 */
   detach() {
     this.stopHeartbeat();
+    this.stopStats();
     if (this.accelCal) {
       this.accelCal = null;
       this.emit({ type: 'ot_accel_cal_done', ok: false, text: '连接断开，校准中止' });
     }
+    this.prearmWin = null;
+    this.singleTestUntil = 0;
     if (this.link) { this.link.close(); this.link = null; }
     this.paramCacheAll = {};
     this.attached = false;
@@ -146,6 +162,40 @@ export class FcOps {
 
   stopHeartbeat() {
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+  }
+
+  /** 消息速率统计: 每秒向前端推送一次 (连接建立时启动) */
+  startStats() {
+    this.stopStats();
+    this.mavStats.period = {};
+    this.mavStats.cum = {};
+    this.mavStats.recent = [];
+    this.mavStats.windowStart = Date.now();
+    this.statsTimer = setInterval(() => this.flushStats(), 1000);
+  }
+
+  stopStats() {
+    if (this.statsTimer) { clearInterval(this.statsTimer); this.statsTimer = null; }
+  }
+
+  /** 记录一条已解码消息: 累计计数 + 最近样本环形缓冲 */
+  countMav(name, fields) {
+    const s = this.mavStats;
+    s.period[name] = (s.period[name] || 0) + 1;
+    s.cum[name] = (s.cum[name] || 0) + 1;
+    s.recent.push({ t: Date.now(), name, fields });
+    if (s.recent.length > this.RECENT_MAX) s.recent.splice(0, s.recent.length - this.RECENT_MAX);
+  }
+
+  flushStats() {
+    const s = this.mavStats;
+    const windowMs = Math.max(1, Date.now() - s.windowStart);
+    let total = 0;
+    for (const k of Object.keys(s.period)) total += s.period[k];
+    const counts = s.period;
+    s.period = {};
+    s.windowStart = Date.now();
+    this.emit({ type: 'mav_stats', counts, cum: s.cum, total, windowMs });
   }
 
   withLock(fn) {
@@ -202,6 +252,7 @@ export class FcOps {
   // ==================== MAVLink 消息处理 ====================
   handleMavlink(m) {
     const t = this.telemetry;
+    this.countMav(m.name, m.fields);
     if (m.sysid && m.sysid !== this.link.link.srcSys) {
       t.sysid = m.sysid;
       t.compid = m.compid || t.compid;
@@ -291,19 +342,104 @@ export class FcOps {
           currentBattery: m.fields.current_battery,
           batteryRemaining: m.fields.battery_remaining,
           load: m.fields.load,
+          sensorsPresent: (m.fields.onboard_control_sensors_present || 0) >>> 0,
+          sensorsEnabled: (m.fields.onboard_control_sensors_enabled || 0) >>> 0,
+          sensorsHealth: (m.fields.onboard_control_sensors_health || 0) >>> 0,
+          sensorsPresentExt: (m.fields.onboard_control_sensors_present_extended || 0) >>> 0,
+          sensorsEnabledExt: (m.fields.onboard_control_sensors_enabled_extended || 0) >>> 0,
+          sensorsHealthExt: (m.fields.onboard_control_sensors_health_extended || 0) >>> 0,
         });
         break;
       }
       case 'ESC_TELEMETRY_1_TO_4': {
-        this.lastEsc = { rpm: m.fields.rpm, t: Date.now() };
+        const f = m.fields;
+        this.lastEsc = { rpm: f.rpm, t: Date.now() };
+        const rpm0 = Array.isArray(f.rpm) ? f.rpm[0] : undefined;
+        if (rpm0 !== undefined && rpm0 > 0) {
+          this.emit({
+            type: 'esc_telemetry',
+            rpm: Number(rpm0),
+            temp: Array.isArray(f.temperature) ? Number(f.temperature[0]) : null,
+            volt: Array.isArray(f.voltage) ? Number(f.voltage[0]) / 100 : null,
+            curr: Array.isArray(f.current) ? Number(f.current[0]) / 100 : null,
+          });
+        }
+        break;
+      }
+      case 'GPS_RAW_INT': {
+        const f = m.fields;
+        this.emit({
+          type: 'gps_status',
+          fixType: f.fix_type,
+          satellites: f.satellites_visible,
+          eph: f.eph,
+        });
+        break;
+      }
+      case 'VIBRATION': {
+        const f = m.fields;
+        this.emit({
+          type: 'vibration',
+          timeBootMs: f.time_usec / 1000,
+          vibX: f.vibration_x,
+          vibY: f.vibration_y,
+          vibZ: f.vibration_z,
+          clipping: [f.clipping_0 || 0, f.clipping_1 || 0, f.clipping_2 || 0],
+        });
+        break;
+      }
+      case 'EKF_STATUS_REPORT': {
+        const f = m.fields;
+        this.emit({
+          type: 'ekf_status',
+          velocityVariance: f.velocity_variance,
+          posHorizVariance: f.pos_horiz_variance,
+          posVertVariance: f.pos_vert_variance,
+          compassVariance: f.compass_variance,
+          terrainAltVariance: f.terrain_alt_variance,
+          airspeedVariance: f.airspeed_variance,
+          flags: f.flags,
+        });
+        break;
+      }
+      case 'SCALED_IMU2': {
+        const f = m.fields;
+        // 加计 mG -> m/s², 陀螺 mrad/s -> rad/s, 磁计 mGauss -> uT, 温度 c°C -> °C
+        this.emit({
+          type: 'imu_sample',
+          timeBootMs: f.time_boot_ms,
+          ax: (f.xacc || 0) * 0.001 * 9.80665,
+          ay: (f.yacc || 0) * 0.001 * 9.80665,
+          az: (f.zacc || 0) * 0.001 * 9.80665,
+          gx: (f.xgyro || 0) / 1000,
+          gy: (f.ygyro || 0) / 1000,
+          gz: (f.zgyro || 0) / 1000,
+          mx: (f.xmag || 0) * 0.1,
+          my: (f.ymag || 0) * 0.1,
+          mz: (f.zmag || 0) * 0.1,
+          temperature: (f.temperature || 0) / 100,
+        });
+        break;
+      }
+      case 'SCALED_PRESSURE': {
+        const f = m.fields;
+        this.emit({
+          type: 'scaled_pressure',
+          timeBootMs: f.time_boot_ms,
+          pressAbs: f.press_abs,
+          pressDiff: f.press_diff,
+          temperature: (f.temperature || 0) / 100,
+        });
         break;
       }
       case 'STATUSTEXT': {
         this.enqueueMsg('STATUSTEXT', m.fields);
+        const stText = (m.fields.text || '').replace(/\0.*$/, '');
+        if (this.prearmWin) this.prearmWin.texts.push(stText);  // PreArm 检测窗收集
         this.emit({
           type: 'statustext',
           severity: m.fields.severity,
-          text: (m.fields.text || '').replace(/\0.*$/, ''),
+          text: stText,
         });
         break;
       }
@@ -628,6 +764,75 @@ export class FcOps {
     }
   }
 
+  // ==================== 单电机点动测试 (类 Mission Planner, 检查电机/桨叶安装) ====================
+  // DO_MOTOR_TEST: param1=测试顺序(1..4) param2=0(百分比) param3=油门% param4=时长s
+  //                param5=1(单电机模式; 飞控按 param4 秒数自动停止并上锁输出)
+  async otMotorTest(msg) {
+    if (this.telemetry.firmware === 'px4') {
+      this.emit({ type: 'ot_motor_test_done', ok: false, text: 'PX4 不支持本工具电机测试, 请用 QGC 的 Motor 测试。' });
+      return;
+    }
+    const motor = Math.round(Number(msg.motor));
+    const pct = Math.round(Number(msg.pct));
+    const seconds = Number(msg.seconds);
+    if (!(motor >= 1 && motor <= 4) || !(pct >= 1 && pct <= 30) || !(seconds >= 1 && seconds <= 10)) {
+      this.emit({ type: 'ot_motor_test_done', ok: false, text: '参数无效: 电机号 1-4、油门 1-30%、时长 1-10 秒' });
+      return;
+    }
+    if (this.telemetry.armed) {
+      this.emit({ type: 'ot_motor_test_done', ok: false, text: '飞控已解锁，禁止电机测试' });
+      return;
+    }
+    if (this.singleTestUntil && Date.now() < this.singleTestUntil) {
+      this.emit({ type: 'ot_motor_test_done', ok: false, text: '上一次点动测试尚未结束, 请先停止或稍候' });
+      return;
+    }
+    const ack = await this.link.sendCommand(
+      MAV_CMD.DO_MOTOR_TEST,
+      [motor, MOTOR_TEST_THROTTLE_PERCENT, pct, seconds, 1, 0, 0],
+      { timeout: 4000 });
+    if (ack.result !== null && ack.result !== MAV_RESULT.ACCEPTED
+        && ack.result !== MAV_RESULT.IN_PROGRESS) {
+      this.emit({
+        type: 'ot_motor_test_done', ok: false,
+        text: '电机测试被拒 (result=' + ack.result + ') '
+          + (ack.text && ack.text.join('; ') || ''),
+      });
+      return;
+    }
+    this.singleTestUntil = Date.now() + seconds * 1000 + 1000;
+    this.emit({
+      type: 'ot_motor_test_done', ok: true, motor, pct, seconds,
+      note: ack.result === null
+        ? '未收到回执(超时); 若电机已转动, 飞控将按 ' + seconds + ' 秒自动停止'
+        : '',
+    });
+  }
+
+  async otMotorStop(msg) {
+    if (this.telemetry.firmware === 'px4') {
+      this.emit({ type: 'ot_motor_stop_done', ok: false, text: 'PX4 不支持本工具电机测试, 请用 QGC 停止。' });
+      return;
+    }
+    const motor = Math.round(Number(msg.motor));
+    if (!(motor >= 1 && motor <= 4)) {
+      this.emit({ type: 'ot_motor_stop_done', ok: false, text: '电机号须 1-4' });
+      return;
+    }
+    this.singleTestUntil = 0;
+    // 时长=0 → 飞控立即结束电机测试 (与 Mission Planner Stop 行为一致)
+    const ack = await this.link.sendCommand(
+      MAV_CMD.DO_MOTOR_TEST,
+      [motor, MOTOR_TEST_THROTTLE_PERCENT, 0, 0, 1, 0, 0],
+      { timeout: 3000 });
+    const ok = ack.result === null || ack.result === MAV_RESULT.ACCEPTED
+      || ack.result === MAV_RESULT.IN_PROGRESS;
+    this.emit({
+      type: 'ot_motor_stop_done', ok, motor,
+      text: ok ? '' : '停止命令被拒 (result=' + ack.result + ')',
+    });
+  }
+
   // ==================== 参数全量备份 / 恢复 ====================
   /** 全量参数回读(PARAM_REQUEST_LIST + 消息队列), 返回 {params, expect} */
   async dumpParamList(opts = {}) {
@@ -901,6 +1106,66 @@ export class FcOps {
     this.emit({ type: 'log_erase_done', ok: erased, text: erased ? '日志已清除' : '清除超时或飞控未确认' });
   }
 
+  // ==================== 传感器检电流速 ====================
+  /** 体检期间提速关键消息; 结束恢复默认(0)。SET_MESSAGE_INTERVAL 在 ArduPilot/PX4 均可用。 */
+  async setSensorStreams(start) {
+    const l = this.link;
+    // msgId -> 体检期间间隔(us)
+    const targets = start
+      ? { 241: 100000, 193: 500000, 116: 40000, 29: 200000 }  // VIBRATION@10Hz EKF@5Hz IMU2@25Hz BARO@5Hz
+      : { 241: 0, 193: 0, 116: 0, 29: 0 };
+    for (const [msgId, intervalUs] of Object.entries(targets)) {
+      try {
+        await l.sendCommand(MAV_CMD.SET_MESSAGE_INTERVAL, [Number(msgId), intervalUs, 0, 0, 0, 0, 0], { timeout: 2000 });
+      } catch (err) {
+        // 单条失败不阻断整体流程 (部分固件不支持个别消息)
+        this.log(`SET_MESSAGE_INTERVAL(${msgId}) 失败: ${err.message}`);
+      }
+    }
+  }
+
+  // ==================== 主动 PreArm 检测 ====================
+  /**
+   * 发 MAV_CMD_RUN_PREARM_CHECKS(401) 并收集执行窗口内的 STATUSTEXT 结果。
+   * 发出后开 4.5s 收集窗: 飞控执行全部预检后回 COMMAND_ACK 并打印
+   * "PreArm: ..." 文本; 窗口结束统一 emit prearm_check_done。
+   */
+  async prearmCheck() {
+    if (this.telemetry.firmware === 'px4') {
+      this.emit({
+        type: 'prearm_check_done', ok: false, unsupported: true, result: null,
+        timeout: false, texts: [],
+        reason: 'PX4 固件不支持 RUN_PREARM_CHECKS, 请在 QGroundControl 中查看预检',
+      });
+      return;
+    }
+    if (this.prearmWin) {
+      this.emit({ type: 'prearm_check_done', ok: false, busy: true, result: null, timeout: false, texts: [], reason: '上一次检测尚未结束' });
+      return;
+    }
+    const win = { texts: [], ack: null };
+    this.prearmWin = win;
+    const WIN_MS = 4500;
+    setTimeout(() => {
+      if (this.prearmWin !== win) return;
+      this.prearmWin = null;
+      const ack = win.ack || { ok: false, result: null, timeout: true };
+      this.emit({
+        type: 'prearm_check_done',
+        ok: !!ack.ok,
+        result: ack.result === undefined ? null : ack.result,
+        timeout: !!ack.timeout,
+        texts: win.texts,
+      });
+    }, WIN_MS);
+    try {
+      const ack = await this.link.sendCommand(MAV_CMD.RUN_PREARM_CHECKS, [], { timeout: WIN_MS - 500 });
+      win.ack = ack;
+    } catch (e) {
+      win.ack = { ok: false, result: null, timeout: true, error: String((e && e.message) || e) };
+    }
+  }
+
   // ==================== 客户端消息入口 ====================
   /**
    * 处理一条前端消息(串口相关子集, 协议与原服务器完全一致)。
@@ -973,6 +1238,36 @@ export class FcOps {
         await this.withLock(() => this.otSpinTest());
         return;
       }
+      // ---------- 单电机点动测试 (检查电机/桨叶安装) ----------
+      case 'ot_motor_test': {
+        const l = this.requireLink(); if (!l) return;
+        await this.withLock(() => this.otMotorTest(msg));
+        return;
+      }
+      case 'ot_motor_stop': {
+        const l = this.requireLink(); if (!l) return;
+        await this.withLock(() => this.otMotorStop(msg));
+        return;
+      }
+      // ---------- 起飞就绪 (PreArm 主动检测) ----------
+      case 'prearm_check': {
+        const l = this.requireLink(); if (!l) return;
+        this.prearmCheck();
+        return;
+      }
+      // ---------- 传感器体检 ----------
+      case 'sensor_check_start': {
+        const l = this.requireLink(); if (!l) return;
+        await this.setSensorStreams(true);
+        this.emit({ type: 'sensor_check_started' });
+        return;
+      }
+      case 'sensor_check_stop': {
+        const l = this.requireLink(); if (!l) return;
+        await this.setSensorStreams(false);
+        this.emit({ type: 'sensor_check_stopped' });
+        return;
+      }
       // ---------- 备份恢复 ----------
       case 'backup_restore': {
         const l = this.requireLink(); if (!l) return;
@@ -1007,6 +1302,13 @@ export class FcOps {
       case 'log_erase': {
         const l = this.requireLink(); if (!l) return;
         await this.withLock(() => this.logErase());
+        return;
+      }
+      // ---------- 消息控制台: 最近消息样本 ----------
+      case 'mav_recent': {
+        const max = Math.max(1, Math.min(200, Number(msg.max) || 80));
+        const list = this.mavStats.recent.slice(-max);
+        this.emit({ type: 'mav_recent', list });
         return;
       }
       default:

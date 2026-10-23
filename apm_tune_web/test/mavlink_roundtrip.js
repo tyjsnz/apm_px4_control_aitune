@@ -23,6 +23,12 @@ export const CASES = [
   ['VFR_HUD', { airspeed: 5, groundspeed: 6, alt: 30, climb: 1.2, heading: 90, throttle: 55 }],
   ['SYS_STATUS', { onboard_control_sensors_present: 1, onboard_control_sensors_enabled: 1, onboard_control_sensors_health: 1, load: 250, voltage_battery: 24000, current_battery: 100, drop_rate_comm: 0, errors_comm: 0, errors_count1: 0, errors_count2: 0, errors_count3: 0, errors_count4: 0, battery_remaining: 80, onboard_control_sensors_present_extended: 0, onboard_control_sensors_enabled_extended: 0, onboard_control_sensors_health_extended: 0 }],
   ['ESC_TELEMETRY_1_TO_4', { voltage: [2400, 2401, 2402, 2403], current: [100, 101, 102, 103], totalcurrent: [10, 11, 12, 13], rpm: [0, 1500, 1600, 1700], count: [1, 2, 3, 4], temperature: [30, 31, 32, 33] }],
+  // 传感器体检
+  ['VIBRATION', { time_usec: 123456789, vibration_x: 1.25, vibration_y: 2.5, vibration_z: 0.75, clipping_0: 0, clipping_1: 1, clipping_2: 2 }],
+  ['EKF_STATUS_REPORT', { velocity_variance: 0.1, pos_horiz_variance: 0.2, pos_vert_variance: 0.3, compass_variance: 0.05, terrain_alt_variance: 0.4, flags: 47, airspeed_variance: 0.01 }],
+  ['SCALED_IMU2', { time_boot_ms: 1000, xacc: 100, yacc: -200, zacc: 1000, xgyro: 10, ygyro: -20, zgyro: 30, xmag: 120, ymag: 230, zmag: -400, temperature: 3500 }],
+  ['SCALED_PRESSURE', { time_boot_ms: 2000, press_abs: 1013.25, press_diff: 0.5, temperature: 2500, temperature_press_diff: 0 }],
+  ['RAW_IMU', { time_usec: 987654321, xacc: 100, yacc: -200, zacc: 1000, xgyro: 10, ygyro: -20, zgyro: 30, xmag: 120, ymag: 230, zmag: -400, id: 0, temperature: 3500 }],
 ];
 
 function numEq(a, b) {
@@ -53,7 +59,8 @@ function gen() {
   const errs = [];
   for (const [name, fields] of CASES) {
     for (const version of [1, 2]) {
-      if (version === 1 && MAVLINK_DEFS[name].id > 255) continue;
+      const def = MAVLINK_DEFS[name];
+      if (version === 1 && (def.id > 255 || def.v1Size === null || def.v1Size === undefined)) continue;
       const chunks = [];
       const link = new MavlinkLink({
         write: (b) => chunks.push(Buffer.from(b)),
