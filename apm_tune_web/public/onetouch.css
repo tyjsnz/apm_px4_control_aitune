@@ -217,6 +217,27 @@
   font-weight: 600;
 }
 
+/* 机架手动指定弹窗 */
+.ot-fp-select {
+  width: 100%;
+  max-width: 420px;
+  padding: 4px 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+}
+.ot-fp-custom {
+  width: 110px;
+  margin-left: 6px;
+  padding: 3px 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
 .ot-danger {
   color: var(--danger);
   font-weight: 600;

@@ -765,6 +765,17 @@
     5: '车', 6: '车', 7: '6DOF电机', 8: '倾转多旋翼', 9: '自定义',
     10: '直升机', 11: '直升机', 12: '直升机', 13: '麦克纳姆', 14: '航天器', 15: '航天器',
   };
+  // PX4 常用 autostart 机架脚本 (SYS_AUTOSTART, 见 PX4-Autopilot ROMFS airframes)
+  const PX4_AUTOSTART_NAMES = {
+    4000: '通用四旋翼', 4001: '通用四旋翼 (新混控)', 4011: 'S500 四旋翼',
+    4013: 'QAV250 竞速', 4017: 'Mobius 小四轴', 4020: 'TBS Caipirinha 2',
+    4050: 'QAV-R 5寸 竞速', 5000: '通用六旋翼', 5001: '同轴六旋翼',
+    5002: 'S600 六旋翼', 6000: '通用八旋翼', 6001: 'S800 八旋翼',
+    1000: '通用VTOL (尾座)', 1001: '通用VTOL (倾转/QuadPlane)',
+    1200: 'Firefly 四倾转', 1300: 'Viper 四倾转',
+    2000: '通用固定翼', 2100: 'Bormtech SkyFly', 2130: 'FunCub QuadPlane',
+    2170: 'ZephIR 滑翔机', 3000: '通用无人车', 3001: 'Aion R1 无人车',
+  };
 
   function renderFrameInfo() {
     const el = $('otFrameInfo');
@@ -776,10 +787,11 @@
       return;
     }
     if (isPx4()) {
-      el.textContent = '机型号: ' + fi.name;
+      el.textContent = '机型号: ' + fi.name + (fi.manual ? ' (手动)' : '');
       el.className = 'ot-frame-info' + (fi.ok ? '' : ' warn');
     } else {
-      el.textContent = '机架: ' + fi.className + (fi.typeName ? ' ' + fi.typeName + '型' : '');
+      el.textContent = '机架: ' + fi.className + (fi.typeName ? ' ' + fi.typeName + '型' : '')
+        + (fi.manual ? ' (手动)' : '');
       el.className = 'ot-frame-info' + (fi.isQuad ? '' : ' warn');
     }
   }
@@ -790,11 +802,19 @@
     const valOf = (r) => (r && r.value !== null && r.value !== undefined && !Number.isNaN(Number(r.value)))
       ? Number(r.value) : null;
     if (isPx4()) {
-      const v = valOf(frameResults[0]);
-      if (v !== null) {
+      // frameResults: [SYS_AUTOSTART, CA_AIRFRAME] — 后者仅启用新混控时存在
+      const vAuto = valOf(frameResults[0]);
+      const vMix = valOf(frameResults[1]);
+      if (vAuto !== null) {
         info.read = true;
-        info.name = PX4_AIRFRAME_NAMES[v] || `CA_AIRFRAME=${v}`;
-        info.ok = (v === 0);
+        info.autostart = vAuto;
+        info.name = PX4_AUTOSTART_NAMES[vAuto] || ('SYS_AUTOSTART=' + vAuto);
+        info.ok = (vAuto >= 4000 && vAuto < 7000);  // 4xxx 四旋翼 5xxx 六旋翼 6xxx 八旋翼
+        if (vMix !== null) info.mixerAirframe = PX4_AIRFRAME_NAMES[vMix] || ('CA_AIRFRAME=' + vMix);
+      } else if (vMix !== null) {
+        info.read = true;
+        info.name = PX4_AIRFRAME_NAMES[vMix] || `CA_AIRFRAME=${vMix}`;
+        info.ok = (vMix === 0);
       }
     } else {
       const vc = valOf(frameResults[0]);
@@ -819,16 +839,123 @@
     const fi = state.frameInfo;
     if (!fi || !fi.read) return [];
     if (isPx4()) {
-      return fi.ok ? []
-        : [`  ⚠ 机型号为 ${fi.name} (非多旋翼)，本工具方案按多旋翼参数体系派生，可能不适用，请人工复核`];
+      const out = [];
+      if (fi.manual) out.push('  ℹ 机架为手动指定 (来源: 用户确认, 非参数读取)');
+      if (!fi.ok) out.push(`  ⚠ 机型号为 ${fi.name} (非多旋翼)，本工具方案按多旋翼参数体系派生，可能不适用，请人工复核`);
+      return out;
     }
     const out = [];
+    if (fi.manual) out.push('  ℹ 机架为手动指定 (来源: 用户确认, 非参数读取)');
     if (!fi.isQuad) {
       out.push(`  ⚠ 当前机架为 ${fi.className}，本工具方案按四旋翼多旋翼派生，电机混控/部分参数可能不适用，请人工复核`);
     } else if (fi.typeName && !fi.typeStandard) {
       out.push(`  ℹ 混控布局为 ${fi.typeName} (非 +/X 标准)，ATC/MOT 参数通用，请核对电机序号与转向`);
     }
     return out;
+  }
+
+  // ---------- 机架手动指定 (Mission Planner 式) ----------
+  /** 弹出机架选择; 默认仅本地确认用于体检判断, 勾选后才写入飞控参数 */
+  function showFramePicker() {
+    if (!state.connected) { alert('请先连接飞控'); return; }
+    const old = document.getElementById('otFrameModal');
+    if (old) old.remove();
+    const isP = isPx4();
+    const fi = state.frameInfo || {};
+    const modal = document.createElement('div');
+    modal.id = 'otFrameModal';
+    modal.className = 'ot-modal';
+    let body = '';
+    if (isP) {
+      const opts = Object.keys(PX4_AUTOSTART_NAMES).map((k) =>
+        `<option value="${k}"${Number(fi.autostart) === Number(k) ? ' selected' : ''}>${k} — ${PX4_AUTOSTART_NAMES[k]}</option>`).join('');
+      body = `
+        <p>机架机型 <code>SYS_AUTOSTART</code> (机架启动脚本):</p>
+        <select id="otFpAutostart" class="ot-fp-select">${opts}</select>
+        <p class="ot-modal-hint">或输入自定义 autostart ID (优先于下拉, 如 4001):
+          <input id="otFpCustom" type="number" min="0" placeholder="如 4001" class="ot-fp-custom" /></p>`;
+    } else {
+      const classOpts = Object.keys(FRAME_CLASS_NAMES).map((k) =>
+        `<option value="${k}"${Number(fi.classId) === Number(k) ? ' selected' : ''}>${k} — ${FRAME_CLASS_NAMES[k]}</option>`).join('');
+      const typeOpts = Object.keys(FRAME_TYPE_NAMES).map((k) =>
+        `<option value="${k}"${Number(fi.typeId) === Number(k) ? ' selected' : ''}>${k} — ${FRAME_TYPE_NAMES[k]}</option>`).join('');
+      body = `
+        <p>机架类别 <code>FRAME_CLASS</code>:</p>
+        <select id="otFpClass" class="ot-fp-select">${classOpts}</select>
+        <p>混控布局 <code>FRAME_TYPE</code>:</p>
+        <select id="otFpType" class="ot-fp-select">${typeOpts}</select>`;
+    }
+    modal.innerHTML = `
+      <div class="ot-modal-box">
+        <h3>指定机架 (Mission Planner 式)</h3>
+        ${body}
+        <label class="ot-confirm-lab" style="color:var(--text-secondary)">
+          <input type="checkbox" id="otFpWrite" />
+          <span>同时写入飞控${isP ? ' (SYS_AUTOSTART, 需重启生效)' : ' (FRAME_CLASS/FRAME_TYPE, 影响电机混控)'}; 不勾选则仅用于本次体检判断</span>
+        </label>
+        <div class="ot-modal-actions">
+          <button id="otFpOk">确定</button>
+          <button id="otFpCancel">取消</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.querySelector('#otFpCancel').onclick = () => modal.remove();
+    modal.querySelector('#otFpOk').onclick = () => applyFramePick(modal);
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  }
+
+  function applyFramePick(modal) {
+    const isP = isPx4();
+    let info;
+    if (isP) {
+      const custom = parseInt((modal.querySelector('#otFpCustom') || {}).value, 10);
+      const sel = parseInt((modal.querySelector('#otFpAutostart') || {}).value, 10);
+      const id = Number.isFinite(custom) && custom > 0 ? custom : sel;
+      if (!Number.isFinite(id) || id < 0) { alert('请选择或输入有效的 autostart ID'); return; }
+      info = {
+        read: true, manual: true, source: 'manual', autostart: id,
+        name: PX4_AUTOSTART_NAMES[id] || ('SYS_AUTOSTART=' + id),
+        ok: (id >= 4000 && id < 7000),   // 4xxx 四旋翼 5xxx 六旋翼 6xxx 八旋翼
+      };
+    } else {
+      const vc = parseInt(modal.querySelector('#otFpClass').value, 10);
+      const vt = parseInt(modal.querySelector('#otFpType').value, 10);
+      if (!Number.isFinite(vc) || vc < 0) { alert('请选择机架类别'); return; }
+      info = {
+        read: true, manual: true, source: 'manual', classId: vc, typeId: vt,
+        className: FRAME_CLASS_NAMES[vc] || ('FRAME_CLASS=' + vc), isQuad: (vc === 1),
+        typeName: FRAME_TYPE_NAMES[vt] || ('FRAME_TYPE=' + vt),
+        typeStandard: (vt === 0 || vt === 1),
+      };
+    }
+    state.frameInfo = info;
+    renderFrameInfo();
+    const doWrite = !!(modal.querySelector('#otFpWrite') || {}).checked;
+    report('机架已手动指定: ' + (isP ? info.name : info.className + ' ' + info.typeName + '型')
+      + (doWrite ? ' (将写入飞控)' : ' (仅本地确认, 未写入)'), false);
+    modal.remove();
+    if (doWrite) writeFrameParams(info);
+  }
+
+  /** 将手动指定的机架写入飞控 (二次确认后) */
+  function writeFrameParams(info) {
+    if (!state.connected) return;
+    if (isPx4()) {
+      if (!confirm(`将 SYS_AUTOSTART=${info.autostart} 写入飞控。\n⚠ PX4 机架脚本需重启后生效。写入？`)) {
+        report('  已取消写入 SYS_AUTOSTART', false);
+        return;
+      }
+      wsSend({ type: 'set_param', paramId: 'SYS_AUTOSTART', paramValue: info.autostart });
+      report(`  已发送 SYS_AUTOSTART=${info.autostart}, 请重启飞控生效`, false);
+    } else {
+      if (!confirm(`将 FRAME_CLASS=${info.classId}, FRAME_TYPE=${info.typeId} 写入飞控。\n⚠ 机架参数决定电机混控与序号, 必须与实际机架一致。写入？`)) {
+        report('  已取消写入机架参数', false);
+        return;
+      }
+      wsSend({ type: 'set_param', paramId: 'FRAME_CLASS', paramValue: info.classId });
+      wsSend({ type: 'set_param', paramId: 'FRAME_TYPE', paramValue: info.typeId });
+      report(`  已发送 FRAME_CLASS=${info.classId}, FRAME_TYPE=${info.typeId}`, false);
+    }
   }
 
   function doRead() {
@@ -843,7 +970,7 @@
       aliases: row.entry.aliases || [],
     }));
     const frameParams = isPx4()
-      ? [{ name: 'CA_AIRFRAME', aliases: [] }]
+      ? [{ name: 'SYS_AUTOSTART', aliases: [] }, { name: 'CA_AIRFRAME', aliases: [] }]
       : [{ name: 'FRAME_CLASS', aliases: [] }, { name: 'FRAME_TYPE', aliases: [] }];
     state.frameParamCount = frameParams.length;
     params.push(...frameParams);
@@ -1449,6 +1576,7 @@
     $('otBtnRead').onclick = doRead;
     $('otBtnWrite').onclick = doWrite;
     $('otBtnHelp').onclick = showHelp;
+    $('otBtnFrame').onclick = showFramePicker;
     $('otBtnClear').onclick = () => report('', true);
     $('otCalGyro').onclick = () => doCal('gyro');
     $('otCalBaro').onclick = () => doCal('baro');
